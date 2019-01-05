@@ -2,11 +2,11 @@
 Command-line tool to convert yaml-annotated types specified in go file to json schema. It parses the Go file into an abstract-syntax-tree and generates its corresponding [json-schema](https://json-schema.org/) output.
 
 ### Input go file:
-```
+```go
 type Person struct {
   Name     string    `yaml:"name"`
   Age      int       `yaml:"age,omitempty"`
-  Address *Address   `yaml:"address,omitempty"`
+  Address  *Address  `yaml:"address,omitempty"`
 }
 
 type Address struct {
@@ -14,7 +14,7 @@ type Address struct {
 ```
 
 ### Output json file:
-```
+```json
 {
   "definitions": {
     "Person": {
@@ -23,7 +23,7 @@ type Address struct {
           "type": "string"
         },
         "age": {
-          "type": "number
+          "type": "number"
         },
         "address": {
           "$ref": "#/definitions/Address"
