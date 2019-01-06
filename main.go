@@ -168,6 +168,68 @@ func parseArrayType(arrayType *ast.ArrayType) *Definition {
 	return definition
 }
 
+// Merges the properties from the 'rhsDef' to the 'lhsDef'.
+// Also transfers the description as well.
+func mergeDefinitions(lhsDef *Definition, rhsDef *Definition) {
+	// At this point, both defs will not have any 'AnyOf' defs.
+	// 1. Add all the properties from rhsDef to lhsDef
+	if lhsDef.Properties == nil {
+		lhsDef.Properties = make(map[string]*Definition)
+	}
+	for propKey, propValue := range rhsDef.Properties {
+		lhsDef.Properties[propKey] = propValue
+	}
+	// 2. Transfer the description
+	if len(lhsDef.Description) == 0 {
+		lhsDef.Description = rhsDef.Description
+	}
+}
+
+// Gets the resource name from definitions url.
+// Eg, returns 'TypeName' from '#/definitions/TypeName'
+func getNameFromURL(url string) string {
+	slice := strings.Split(url, "/")
+	return slice[len(slice)-1]
+}
+
+// Recursively flattens "anyOf" tags. If there is cyclic
+// dependency, execution is aborted.
+func recursiveFlatten(schema *Schema, definition *Definition, defName string, visited *map[string]bool) *Definition {
+	if len(definition.AllOf) == 0 {
+		return definition
+	}
+	isAlreadyVisited := (*visited)[defName]
+	if isAlreadyVisited {
+		panic("Cycle detected in definitions")
+	}
+	(*visited)[defName] = true
+
+	aggregatedDef := new(Definition)
+	for _, allOfDef := range definition.AllOf {
+		var newDef *Definition
+		if allOfDef.Ref != "" {
+			// If the definition has $ref url, fetch the referred resource
+			// after flattening it.
+			nameOfRef := getNameFromURL(allOfDef.Ref)
+			newDef = recursiveFlatten(schema, schema.Definitions[nameOfRef], nameOfRef, visited)
+		} else {
+			newDef = allOfDef
+		}
+		mergeDefinitions(aggregatedDef, newDef)
+	}
+
+	delete(*visited, defName)
+	return aggregatedDef
+}
+
+// Flattens the schema by inlining 'anyOf' tags.
+func flattenSchema(schema *Schema) {
+	for nameOfDef, def := range schema.Definitions {
+		visited := make(map[string]bool)
+		schema.Definitions[nameOfDef] = recursiveFlatten(schema, def, nameOfDef, &visited)
+	}
+}
+
 // Parses a struct type and returns its corresponding
 // schema definition.
 func parseStructType(structType *ast.StructType, typeName string, typeDescription string) *Definition {
@@ -251,14 +313,6 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 		// There are no inlined definitions
 		return definition
 	}
-	if len(inlineDefinitions) == 1 && len(definition.Properties) == 0 {
-		// If there is only one "inline" definition
-		// and there are no properties associated with
-		// the parent definition, we just refer to the
-		// "inline" definition.
-		definition.Ref = inlineDefinitions[0].Ref
-		return definition
-	}
 
 	// There are inlined definitions; we need to set
 	// the "anyOf" property of a new parent node and attach
@@ -277,6 +331,7 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 func main() {
 	inputPath := flag.String("input-file", "", "Input go file path")
 	outputPath := flag.String("output-file", "", "Output schema json path")
+	removeAllOfs := flag.Bool("remove-allof", false, "Flattens the json schema by removing \"allOf\"s")
 
 	flag.Parse()
 
@@ -327,6 +382,11 @@ func main() {
 				schema.Definitions[typeName] = parsedStructDef
 			}
 		}
+	}
+
+	if *removeAllOfs {
+		fmt.Println("Flattening the schema by removing \"anyOf\" nodes")
+		flattenSchema(&schema)
 	}
 
 	marshalledSchema, err := json.Marshal(schema)
