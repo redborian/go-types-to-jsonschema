@@ -44,6 +44,6 @@ Currently, the only way to run the tool is through `go run`
 1. Clone the repo
 2. `go run main.go --input-file="<Go-file-path>" --output-file="<Output-json-path>"`
 
-
+To flatten the generated schema by inlining "anyOf" nodes, use "--remove-allof=true" flag.
 
 Note: This is not an official Google product
