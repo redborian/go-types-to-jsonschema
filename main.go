@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/ioutil"
 	"log"
+	"os"
 	"strings"
 )
 
@@ -66,13 +65,6 @@ type Definition struct {
 	// RFC draft-wright-json-schema-hyperschema-00, section 4
 	Media          *Definition `json:"media,omitempty"`          // section 4.3
 	BinaryEncoding string      `json:"binaryEncoding,omitempty"` // section 4.3
-}
-
-// Prettifies the json in the input string
-func prettifyJSON(input string) string {
-	var prettyInput bytes.Buffer
-	json.Indent(&prettyInput, []byte(input), "", "  ")
-	return string(prettyInput.Bytes())
 }
 
 const defPrefix = "#/definitions/"
@@ -389,12 +381,17 @@ func main() {
 		flattenSchema(&schema)
 	}
 
-	marshalledSchema, err := json.Marshal(schema)
+	out, err := os.Create(*outputPath)
 	if err != nil {
 		log.Panic(err)
 	}
-	output := prettifyJSON(string(marshalledSchema))
-	err = ioutil.WriteFile(*outputPath, []byte(output), 0644)
+
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	err = enc.Encode(schema)
+	if err2 := out.Close(); err == nil {
+		err = err2
+	}
 	if err != nil {
 		log.Panic(err)
 	}
