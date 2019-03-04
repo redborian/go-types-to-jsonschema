@@ -70,24 +70,6 @@ type Definition struct {
 const defPrefix = "#/definitions/"
 
 // Checks whether the typeName represents a simple json type
-func isSimpleType(typeName string) bool {
-	return typeName == "string" || typeName == "int" || typeName == "int64" || typeName == "bool"
-}
-
-// Converts the typeName simple type to json type
-func jsonifyType(typeName string) string {
-	switch typeName {
-	case "string":
-		return "string"
-	case "bool":
-		return "boolean"
-	case "int":
-		return "number"
-	case "int64":
-		return "number"
-	}
-	panic("jsonifyType called with a complex type")
-}
 
 // Gets the type name of the array
 func getTypeNameOfArray(arrayType *ast.ArrayType) string {
@@ -129,7 +111,7 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	tagValue = strings.TrimSpace(tagValue)
 
 	var yamlTagContent string
-	fmt.Sscanf(tagValue, `yaml: %s`, &yamlTagContent)
+	fmt.Sscanf(tagValue, `json: %s`, &yamlTagContent)
 
 	if strings.Contains(yamlTagContent, ",") {
 		splitContent := strings.Split(yamlTagContent, ",")
@@ -285,13 +267,29 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 			property.Type = "object"
 		case *ast.StarExpr:
 			starExpr := field.Type.(*ast.StarExpr)
-			starType := starExpr.X.(*ast.Ident)
-			typeName := starType.Name
+			// starType := starExpr.X.(*ast.Ident)
+			// typeName := starType.Name
 
-			if isSimpleType(typeName) {
-				property.Type = jsonifyType(typeName)
-			} else {
-				property.Ref = getDefLink(typeName)
+			// if isSimpleType(typeName) {
+			// 	property.Type = jsonifyType(typeName)
+			// } else {
+			// 	property.Ref = getDefLink(typeName)
+			// }
+			switch starExpr.X.(type) {
+			case *ast.Ident:
+				starType := starExpr.X.(*ast.Ident)
+				typeName := starType.Name
+
+				if isSimpleType(typeName) {
+					property.Type = jsonifyType(typeName)
+				} else {
+					property.Ref = getDefLink(typeName)
+				}
+			case *ast.SelectorExpr:
+				selectorType := starExpr.X.(*ast.SelectorExpr)
+				// println(selectorType)
+				fmt.Printf("%+v\n", selectorType)
+				// panic("Stop Execution")
 			}
 		}
 		// Set the common properties here as the cases might
@@ -342,6 +340,12 @@ func main() {
 		Definition:  &Definition{},
 		Definitions: make(map[string]*Definition)}
 	schema.Type = "object"
+	// fmt.Println("%+v", node.Imports)
+	b, err3 := json.Marshal(node.Imports)
+	if err3 != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
 
 	for _, i := range node.Decls {
 		declaration, ok := i.(*ast.GenDecl)
