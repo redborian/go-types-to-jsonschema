@@ -12,61 +12,6 @@ import (
 	"strings"
 )
 
-// Schema is the root schema.
-// RFC draft-wright-json-schema-00, section 4.5
-type Schema struct {
-	*Definition
-	Definitions Definitions `json:"definitions,omitempty"`
-}
-
-// Definitions hold schema definitions.
-// http://json-schema.org/latest/json-schema-validation.html#rfc.section.5.26
-// RFC draft-wright-json-schema-validation-00, section 5.26
-type Definitions map[string]*Definition
-
-// Definition type represents a JSON Schema object type.
-type Definition struct {
-	// RFC draft-wright-json-schema-00
-	Version string `json:"$schema,omitempty"` // section 6.1
-	Ref     string `json:"$ref,omitempty"`    // section 7
-	// RFC draft-wright-json-schema-validation-00, section 5
-	MultipleOf           int                    `json:"multipleOf,omitempty"`           // section 5.1
-	Maximum              int                    `json:"maximum,omitempty"`              // section 5.2
-	ExclusiveMaximum     bool                   `json:"exclusiveMaximum,omitempty"`     // section 5.3
-	Minimum              int                    `json:"minimum,omitempty"`              // section 5.4
-	ExclusiveMinimum     bool                   `json:"exclusiveMinimum,omitempty"`     // section 5.5
-	MaxLength            int                    `json:"maxLength,omitempty"`            // section 5.6
-	MinLength            int                    `json:"minLength,omitempty"`            // section 5.7
-	Pattern              string                 `json:"pattern,omitempty"`              // section 5.8
-	AdditionalItems      *Definition            `json:"additionalItems,omitempty"`      // section 5.9
-	Items                *Definition            `json:"items,omitempty"`                // section 5.9
-	MaxItems             int                    `json:"maxItems,omitempty"`             // section 5.10
-	MinItems             int                    `json:"minItems,omitempty"`             // section 5.11
-	UniqueItems          bool                   `json:"uniqueItems,omitempty"`          // section 5.12
-	MaxProperties        int                    `json:"maxProperties,omitempty"`        // section 5.13
-	MinProperties        int                    `json:"minProperties,omitempty"`        // section 5.14
-	Required             []string               `json:"required,omitempty"`             // section 5.15
-	Properties           map[string]*Definition `json:"properties,omitempty"`           // section 5.16
-	PatternProperties    map[string]*Definition `json:"patternProperties,omitempty"`    // section 5.17
-	AdditionalProperties *Definition            `json:"additionalProperties,omitempty"` // section 5.18
-	Dependencies         map[string]*Definition `json:"dependencies,omitempty"`         // section 5.19
-	Enum                 []interface{}          `json:"enum,omitempty"`                 // section 5.20
-	Type                 string                 `json:"type,omitempty"`                 // section 5.21
-	AllOf                []*Definition          `json:"allOf,omitempty"`                // section 5.22
-	AnyOf                []*Definition          `json:"anyOf,omitempty"`                // section 5.23
-	OneOf                []*Definition          `json:"oneOf,omitempty"`                // section 5.24
-	Not                  *Definition            `json:"not,omitempty"`                  // section 5.25
-	Definitions          Definitions            `json:"definitions,omitempty"`          // section 5.26
-	// RFC draft-wright-json-schema-validation-00, section 6, 7
-	Title       string      `json:"title,omitempty"`       // section 6.1
-	Description string      `json:"description,omitempty"` // section 6.1
-	Default     interface{} `json:"default,omitempty"`     // section 6.2
-	Format      string      `json:"format,omitempty"`      // section 7
-	// RFC draft-wright-json-schema-hyperschema-00, section 4
-	Media          *Definition `json:"media,omitempty"`          // section 4.3
-	BinaryEncoding string      `json:"binaryEncoding,omitempty"` // section 4.3
-}
-
 const defPrefix = "#/definitions/"
 
 // Checks whether the typeName represents a simple json type
@@ -166,52 +111,15 @@ func getNameFromURL(url string) string {
 	return slice[len(slice)-1]
 }
 
-// Recursively flattens "anyOf" tags. If there is cyclic
-// dependency, execution is aborted.
-func recursiveFlatten(schema *Schema, definition *Definition, defName string, visited *map[string]bool) *Definition {
-	if len(definition.AllOf) == 0 {
-		return definition
-	}
-	isAlreadyVisited := (*visited)[defName]
-	if isAlreadyVisited {
-		panic("Cycle detected in definitions")
-	}
-	(*visited)[defName] = true
-
-	aggregatedDef := new(Definition)
-	for _, allOfDef := range definition.AllOf {
-		var newDef *Definition
-		if allOfDef.Ref != "" {
-			// If the definition has $ref url, fetch the referred resource
-			// after flattening it.
-			nameOfRef := getNameFromURL(allOfDef.Ref)
-			newDef = recursiveFlatten(schema, schema.Definitions[nameOfRef], nameOfRef, visited)
-		} else {
-			newDef = allOfDef
-		}
-		mergeDefinitions(aggregatedDef, newDef)
-	}
-
-	delete(*visited, defName)
-	return aggregatedDef
-}
-
-// Flattens the schema by inlining 'anyOf' tags.
-func flattenSchema(schema *Schema) {
-	for nameOfDef, def := range schema.Definitions {
-		visited := make(map[string]bool)
-		schema.Definitions[nameOfDef] = recursiveFlatten(schema, def, nameOfDef, &visited)
-	}
-}
-
 // Parses a struct type and returns its corresponding
 // schema definition.
-func parseStructType(structType *ast.StructType, typeName string, typeDescription string) *Definition {
+func parseStructType(structType *ast.StructType, typeName string, typeDescription string) (*Definition, map[string][]string) {
 	definition := &Definition{}
 	definition.Description = typeDescription
 	definition.Properties = make(map[string]*Definition)
 	definition.Required = []string{}
 	inlineDefinitions := []*Definition{}
+	externalTypes := make(map[string][]string)
 
 	for _, field := range structType.Fields.List {
 		property := new(Definition)
@@ -265,6 +173,14 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 				// No op
 			}
 			property.Type = "object"
+		case *ast.SelectorExpr:
+			selectorType := field.Type.(*ast.SelectorExpr)
+			prefix := selectorType.X.(*ast.Ident).Name
+			typeName := selectorType.Sel.Name
+
+			property.Ref = getDefLink(typeName)
+			// Collect external references
+			externalTypes[prefix] = append(externalTypes[prefix], typeName)
 		case *ast.StarExpr:
 			starExpr := field.Type.(*ast.StarExpr)
 			// starType := starExpr.X.(*ast.Ident)
@@ -289,6 +205,7 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 				selectorType := starExpr.X.(*ast.SelectorExpr)
 				// println(selectorType)
 				fmt.Printf("%+v\n", selectorType)
+				fmt.Printf("TODO")
 				// panic("Stop Execution")
 			}
 		}
@@ -301,7 +218,7 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 
 	if len(inlineDefinitions) == 0 {
 		// There are no inlined definitions
-		return definition
+		return definition, externalTypes
 	}
 
 	// There are inlined definitions; we need to set
@@ -315,38 +232,23 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 		parentDefinition.AllOf = append(inlineDefinitions, definition)
 	}
 
-	return parentDefinition
+	return parentDefinition, externalTypes
 }
 
-func main() {
-	inputPath := flag.String("input-file", "", "Input go file path")
-	outputPath := flag.String("output-file", "", "Output schema json path")
-	removeAllOfs := flag.Bool("remove-allof", false, "Flattens the json schema by removing \"allOf\"s")
+func getReachableTypes(startingTypes []string) []string {
+	return []string{}
+}
 
-	flag.Parse()
-
-	if len(*inputPath) == 0 || len(*outputPath) == 0 {
-		log.Panic("Both input path and output paths need to be set")
-	}
-
+func parseTypesInFile(filePath string, referencedTypes []string, containsAllTypes bool) Definitions {
 	// Open the input go file and parse the Abstract Syntax Tree
 	fset := token.NewFileSet()
-	node, err := parser.ParseFile(fset, *inputPath, nil, parser.ParseComments)
+	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	schema := Schema{
-		Definition:  &Definition{},
-		Definitions: make(map[string]*Definition)}
-	schema.Type = "object"
-	// fmt.Println("%+v", node.Imports)
-	b, err3 := json.Marshal(node.Imports)
-	if err3 != nil {
-		panic(err)
-	}
-	fmt.Println(string(b))
-
+	definitions := make(Definitions)
+	externalTypes := make(map[string][]string)
 	for _, i := range node.Decls {
 		declaration, ok := i.(*ast.GenDecl)
 		if !ok {
@@ -370,15 +272,67 @@ func main() {
 				arrayType := typeSpec.Type.(*ast.ArrayType)
 				parsedArrayDef := parseArrayType(arrayType)
 
-				schema.Definitions[typeName] = parsedArrayDef
+				definitions[typeName] = parsedArrayDef
+				// collectExternalTypeFromArray(externalTypes, arrayType)
 			case *ast.StructType:
 				structType := typeSpec.Type.(*ast.StructType)
-				parsedStructDef := parseStructType(structType, typeName, typeDescription)
+				parsedStructDef, referencedTypes := parseStructType(structType, typeName, typeDescription)
+				mergeMaps(externalTypes, referencedTypes)
 
-				schema.Definitions[typeName] = parsedStructDef
+				definitions[typeName] = parsedStructDef
 			}
 		}
 	}
+
+	// Prune unreferenced types
+	if !containsAllTypes {
+		allReachableTypes := getReachableTypes(referencedTypes)
+		for key := range definitions {
+			if !arrayContains(allReachableTypes, key) {
+				delete(definitions, key)
+			}
+		}
+	}
+
+	// Expand external references
+	// Assume no cyclic references across files
+	// fmt.Println("%+v", node.Imports)
+	// debugPrint(node.Imports)
+	importPaths := make(map[string]string)
+	for _, importItem := range node.Imports {
+		if importItem.Name != nil {
+			importPaths[importItem.Name.Name] = importItem.Path.Value
+		}
+	}
+	debugPrint(externalTypes)
+	debugPrint(importPaths)
+
+	return definitions
+}
+
+func main() {
+	inputPath := flag.String("input-file", "", "Input go file path")
+	outputPath := flag.String("output-file", "", "Output schema json path")
+	removeAllOfs := flag.Bool("remove-allof", false, "Flattens the json schema by removing \"allOf\"s")
+
+	flag.Parse()
+
+	if len(*inputPath) == 0 || len(*outputPath) == 0 {
+		log.Panic("Both input path and output paths need to be set")
+	}
+
+	schema := Schema{
+		Definition:  &Definition{},
+		Definitions: make(map[string]*Definition)}
+	schema.Type = "object"
+	// fmt.Println("%+v", node.Imports)
+	// b, err3 := json.Marshal(node.Imports)
+	// if err3 != nil {
+	// 	panic(err)
+	// }
+	// fmt.Println(string(b))
+
+	schema.Definitions = parseTypesInFile(*inputPath, []string{}, true)
 
 	if *removeAllOfs {
 		fmt.Println("Flattening the schema by removing \"anyOf\" nodes")

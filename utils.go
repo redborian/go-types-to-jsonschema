@@ -1,5 +1,10 @@
 package main
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 func isSimpleType(typeName string) bool {
 	return typeName == "string" || typeName == "int" || typeName == "int64" || typeName == "bool"
 }
@@ -17,4 +22,32 @@ func jsonifyType(typeName string) string {
 		return "number"
 	}
 	panic("jsonifyType called with a complex type")
+}
+
+func arrayContains(array []string, expectedItem string) bool {
+	for _, curItem := range array {
+		if curItem == expectedItem {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeMaps(lhs map[string][]string, rhs map[string][]string) {
+	for key := range rhs {
+		_, ok := lhs[key]
+		if !ok {
+			lhs[key] = rhs[key]
+		} else {
+			lhs[key] = append(lhs[key], rhs[key]...)
+		}
+	}
+}
+
+func debugPrint(obj interface{}) {
+	b, err3 := json.Marshal(obj)
+	if err3 != nil {
+		panic("Error")
+	}
+	fmt.Println(string(b))
 }
