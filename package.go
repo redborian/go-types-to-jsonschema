@@ -36,6 +36,7 @@ type GoListOutput struct {
 func (p *Package) Fetch() {
 	// fetch package
 	// go get pkgName
+	// pkgName := strings.Trim(p.Name, "\"")
 	cmd := exec.Command("go", "get", p.Name)
 	err := cmd.Run()
 	if err != nil {
@@ -63,6 +64,8 @@ func (p *Package) ListFiles() []string {
 
 func (p *Package) runGoList() GoListOutput {
 	// Run go list command
+	// pkgName := strings.Trim(p.Name, "\"")
+	// fmt.Println("Go List package name: ", pkgName)
 	cmd := exec.Command("go", "list", "-json", p.Name)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -71,6 +74,7 @@ func (p *Package) runGoList() GoListOutput {
 		fmt.Println("Error running go list command:", err)
 	}
 
+	// fmt.Println("Go List output: ", stdout.String())
 	// Unmarshal json output
 	var output GoListOutput
 	err = json.Unmarshal(stdout.Bytes(), &output)

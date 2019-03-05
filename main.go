@@ -16,20 +16,6 @@ const defPrefix = "#/definitions/"
 
 // Checks whether the typeName represents a simple json type
 
-// Gets the type name of the array
-func getTypeNameOfArray(arrayType *ast.ArrayType) string {
-	switch arrayType.Elt.(type) {
-	case *ast.Ident:
-		identifier := arrayType.Elt.(*ast.Ident)
-		return identifier.Name
-	case *ast.StarExpr:
-		starType := arrayType.Elt.(*ast.StarExpr)
-		identifier := starType.X.(*ast.Ident)
-		return identifier.Name
-	}
-	panic("undefined type")
-}
-
 // Removes a character by replacing it with a space
 func removeChar(str string, removedStr string) string {
 	return strings.Replace(str, removedStr, " ", -1)
@@ -50,7 +36,7 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 		return "", ""
 	}
 	tagValue := tag.Value
-	fmt.Println("TagValue is ", tagValue)
+	// fmt.Println("TagValue is ", tagValue)
 
 	// return yamlFieldValue, yamlOptionValue
 	tagValue = removeChar(tagValue, "`")
@@ -74,9 +60,26 @@ func getDefLink(resourceName string) string {
 
 // Parses array type and returns its corresponding
 // schema definition.
-func parseArrayType(arrayType *ast.ArrayType) *Definition {
+func parseArrayType(arrayType *ast.ArrayType) (*Definition, []TypeReference) {
 	definition := new(Definition)
-	typeNameOfArray := getTypeNameOfArray(arrayType)
+	// typeNameOfArray := getTypeNameOfArray(arrayType)
+	var typeNameOfArray string
+	externalTypeRefs := []TypeReference{}
+	switch arrayType.Elt.(type) {
+	case *ast.Ident:
+		identifier := arrayType.Elt.(*ast.Ident)
+		typeNameOfArray = identifier.Name
+	case *ast.StarExpr:
+		starType := arrayType.Elt.(*ast.StarExpr)
+		identifier := starType.X.(*ast.Ident)
+		typeNameOfArray = identifier.Name
+	case *ast.SelectorExpr:
+		selectorType := arrayType.Elt.(*ast.SelectorExpr)
+		packageAlias := selectorType.X.(*ast.Ident).Name
+		typeName := selectorType.Sel.Name
+		typeNameOfArray = typeName
+		externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+	}
 
 	definition.Items = new(Definition)
 	if isSimpleType(typeNameOfArray) {
@@ -86,7 +89,7 @@ func parseArrayType(arrayType *ast.ArrayType) *Definition {
 	}
 	definition.Type = "array"
 
-	return definition
+	return definition, externalTypeRefs
 }
 
 // Merges the properties from the 'rhsDef' to the 'lhsDef'.
@@ -115,13 +118,14 @@ func getNameFromURL(url string) string {
 
 // Parses a struct type and returns its corresponding
 // schema definition.
-func parseStructType(structType *ast.StructType, typeName string, typeDescription string) (*Definition, ExternalReferences) {
+func parseStructType(structType *ast.StructType, structTypeName string, typeDescription string) (*Definition, []TypeReference) {
 	definition := &Definition{}
 	definition.Description = typeDescription
 	definition.Properties = make(map[string]*Definition)
 	definition.Required = []string{}
 	inlineDefinitions := []*Definition{}
-	externalTypes := make(ExternalReferences)
+	// externalTypes := make(ExternalReferences)
+	externalTypeRefs := []TypeReference{}
 
 	for _, field := range structType.Fields.List {
 		property := new(Definition)
@@ -162,7 +166,11 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 			}
 		case *ast.ArrayType:
 			arrayType := field.Type.(*ast.ArrayType)
-			property = parseArrayType(arrayType)
+			var arrayExternalRef []TypeReference
+			property, arrayExternalRef = parseArrayType(arrayType)
+			if len(arrayExternalRef) == 1 {
+				externalTypeRefs = append(externalTypeRefs, arrayExternalRef[0])
+			}
 		case *ast.MapType:
 			mapType := field.Type.(*ast.MapType)
 			switch mapType.Value.(type) {
@@ -186,7 +194,8 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 
 			property.Ref = getDefLink(typeName)
 			// Collect external references
-			externalTypes[typeName] = append(externalTypes[typeName], TypeReference{typeName, packageAlias})
+			// externalTypes[structTypeName] = append(externalTypes[structTypeName], TypeReference{typeName, packageAlias})
+			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 		case *ast.StarExpr:
 			starExpr := field.Type.(*ast.StarExpr)
 			// starType := starExpr.X.(*ast.Ident)
@@ -209,11 +218,15 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 				}
 			case *ast.SelectorExpr:
 				selectorType := starExpr.X.(*ast.SelectorExpr)
-				// println(selectorType)
+				packageAlias := selectorType.X.(*ast.Ident).Name
+				typeName := selectorType.Sel.Name
+
+				externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 				debugPrint(selectorType)
-				fmt.Printf("%+v\n", selectorType)
-				fmt.Printf("TODO")
-				panic("Stop Execution")
+				// externalTypes[]
+				// fmt.Printf("%+v\n", selectorType)
+				// fmt.Printf("TODO")
+				// panic("Stop Execution")
 			}
 		}
 		// Set the common properties here as the cases might
@@ -225,7 +238,7 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 
 	if len(inlineDefinitions) == 0 {
 		// There are no inlined definitions
-		return definition, externalTypes
+		return definition, externalTypeRefs
 	}
 
 	// There are inlined definitions; we need to set
@@ -239,11 +252,13 @@ func parseStructType(structType *ast.StructType, typeName string, typeDescriptio
 		parentDefinition.AllOf = append(inlineDefinitions, definition)
 	}
 
-	return parentDefinition, externalTypes
+	return parentDefinition, externalTypeRefs
 }
 
-func getReachableTypes(startingTypes map[string]bool, definitions Definitions) []string {
-	return []string{}
+func getReachableTypes(startingTypes map[string]bool, definitions Definitions) map[string]bool {
+	pruner := DefinitionPruner{definitions, startingTypes}
+	prunedTypes := pruner.Prune()
+	return prunedTypes
 }
 
 func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
@@ -278,16 +293,17 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 			switch typeSpec.Type.(type) {
 			case *ast.ArrayType:
 				arrayType := typeSpec.Type.(*ast.ArrayType)
-				parsedArrayDef := parseArrayType(arrayType)
+				parsedArrayDef, referencedTypes := parseArrayType(arrayType)
 
 				definitions[typeName] = parsedArrayDef
+				externalRefs[typeName] = referencedTypes
 				// TODO
 				// collectExternalTypeFromArray(externalTypes, arrayType)
 			case *ast.StructType:
 				structType := typeSpec.Type.(*ast.StructType)
 				parsedStructDef, referencedTypes := parseStructType(structType, typeName, typeDescription)
-				mergeExternalRefs(externalRefs, referencedTypes)
-
+				// mergeExternalRefs(externalRefs, referencedTypes)
+				externalRefs[typeName] = referencedTypes
 				definitions[typeName] = parsedStructDef
 			}
 		}
@@ -296,8 +312,14 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 	// Parse import statements to get "alias: pkgName" mapping
 	importPaths := make(map[string]string)
 	for _, importItem := range node.Imports {
+		pathValue := strings.Trim(importItem.Path.Value, "\"")
 		if importItem.Name != nil {
-			importPaths[importItem.Name.Name] = importItem.Path.Value
+			// Process aliased import
+			importPaths[importItem.Name.Name] = pathValue
+		} else if strings.Contains(pathValue, "/") {
+			// Process unnamed imports with "/"
+			segments := strings.Split(pathValue, "/")
+			importPaths[segments[len(segments)-1]] = pathValue
 		}
 	}
 
@@ -307,6 +329,9 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 			externalRefs[typeName][i].PackageName = importPaths[ref.PackageName]
 		}
 	}
+
+	fmt.Print("ImportPaths: ")
+	debugPrint(importPaths)
 
 	return definitions, externalRefs
 }
@@ -327,17 +352,20 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 		mergeExternalRefs(pkgExternalTypes, fileExternalRefs)
 	}
 
-	var allReachableTypes []string
+	var allReachableTypes map[string]bool
 	// Prune unreferenced types
 	if !containsAllTypes {
 		allReachableTypes = getReachableTypes(referencedTypes, pkgDefs)
 		for key := range pkgDefs {
-			if !arrayContains(allReachableTypes, key) {
+			if _, exists := allReachableTypes[key]; !exists {
 				delete(pkgDefs, key)
 				delete(pkgExternalTypes, key)
 			}
 		}
 	}
+
+	fmt.Print("PrunedExternalRefs: ")
+	debugPrint(pkgExternalTypes)
 
 	// Expand external references
 	// Assume no cyclic references across files
@@ -356,9 +384,13 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 		}
 	}
 
-	// for childPkgName := range uniquePkgTypeRefs {
-	// childTypes := uniquePkgTypeRefs[childPkgName]
-	// parseTypesInPackage(childPkgName, childTypes, false)
+	// TODO remove this condition
+	// if containsAllTypes {
+	for childPkgName := range uniquePkgTypeRefs {
+		childTypes := uniquePkgTypeRefs[childPkgName]
+		childDefs := parseTypesInPackage(childPkgName, childTypes, false)
+		mergeDefs(pkgDefs, childDefs)
+	}
 	// }
 
 	return pkgDefs
