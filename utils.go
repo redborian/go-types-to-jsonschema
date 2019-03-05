@@ -6,7 +6,7 @@ import (
 )
 
 func isSimpleType(typeName string) bool {
-	return typeName == "string" || typeName == "int" || typeName == "int64" || typeName == "bool"
+	return typeName == "string" || typeName == "int" || typeName == "int32" || typeName == "int64" || typeName == "bool"
 }
 
 // Converts the typeName simple type to json type
@@ -18,9 +18,12 @@ func jsonifyType(typeName string) string {
 		return "boolean"
 	case "int":
 		return "number"
+	case "int32":
+		return "number"
 	case "int64":
 		return "number"
 	}
+	fmt.Println("jsonifyType called with a complex type ", typeName)
 	panic("jsonifyType called with a complex type")
 }
 
@@ -37,7 +40,8 @@ func mergeDefs(lhs Definitions, rhs Definitions) {
 	for key := range rhs {
 		_, ok := lhs[key]
 		if ok {
-			panic("Definition already present")
+			fmt.Println("Definition ", key, " already present")
+			continue
 		}
 		lhs[key] = rhs[key]
 	}

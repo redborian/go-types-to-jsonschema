@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 // DefinitionPruner prunes unwanted definitions
 type DefinitionPruner struct {
 	definitions   Definitions
@@ -7,7 +9,7 @@ type DefinitionPruner struct {
 }
 
 // Prune prunes the definitions
-func (pruner *DefinitionPruner) Prune() map[string]bool {
+func (pruner *DefinitionPruner) Prune(ignoreUnknownTypes bool) map[string]bool {
 	visitedDefs := make(map[string]bool)
 	queue := make([]string, 0)
 	// Push starting types into queue
@@ -26,8 +28,14 @@ func (pruner *DefinitionPruner) Prune() map[string]bool {
 		// If no definitions present, (probably an external reference)
 		// Skip it
 		if _, exists := pruner.definitions[curType]; !exists {
-			continue
+			if ignoreUnknownTypes {
+				continue
+			} else {
+				fmt.Println("Unknown type ", curType)
+				panic("Unknown type")
+			}
 		}
+		fmt.Println("Visiting ", curType)
 		visitedDefs[curType] = true
 		curDef := pruner.definitions[curType]
 		queue = append(queue, processDefinition(curDef)...)
@@ -45,6 +53,7 @@ func processDefinition(def *Definition) []string {
 		allTypes = append(allTypes, getNameFromURL(def.Ref))
 	}
 	allTypes = append(allTypes, processDefinitionMap(def.Definitions)...)
+	allTypes = append(allTypes, processDefinitionMap(def.Properties)...)
 	allTypes = append(allTypes, processDefinitionArray(def.AllOf)...)
 	allTypes = append(allTypes, processDefinitionArray(def.AnyOf)...)
 	allTypes = append(allTypes, processDefinitionArray(def.OneOf)...)
