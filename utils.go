@@ -33,7 +33,17 @@ func arrayContains(array []string, expectedItem string) bool {
 	return false
 }
 
-func mergeMaps(lhs map[string][]string, rhs map[string][]string) {
+func mergeDefs(lhs Definitions, rhs Definitions) {
+	for key := range rhs {
+		_, ok := lhs[key]
+		if ok {
+			panic("Definition already present")
+		}
+		lhs[key] = rhs[key]
+	}
+}
+
+func mergeExternalRefs(lhs ExternalReferences, rhs ExternalReferences) {
 	for key := range rhs {
 		_, ok := lhs[key]
 		if !ok {

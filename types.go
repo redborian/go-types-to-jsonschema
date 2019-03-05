@@ -54,3 +54,12 @@ type Definition struct {
 	Media          *Definition `json:"media,omitempty"`          // section 4.3
 	BinaryEncoding string      `json:"binaryEncoding,omitempty"` // section 4.3
 }
+
+// TypeReference denotes the (typeName, packageName) tuple
+type TypeReference struct {
+	TypeName    string
+	PackageName string
+}
+
+// ExternalReferences map contains list of "type: packageName" entries
+type ExternalReferences map[string][]TypeReference
