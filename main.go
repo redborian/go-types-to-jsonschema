@@ -43,14 +43,14 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	tagValue = removeChar(tagValue, `"`)
 	tagValue = strings.TrimSpace(tagValue)
 
-	var yamlTagContent string
-	fmt.Sscanf(tagValue, `json: %s`, &yamlTagContent)
+	var tagContent, tagKey string
+	fmt.Sscanf(tagValue, `%s %s`, &tagKey, &tagContent)
 
-	if strings.Contains(yamlTagContent, ",") {
-		splitContent := strings.Split(yamlTagContent, ",")
+	if strings.Contains(tagContent, ",") {
+		splitContent := strings.Split(tagContent, ",")
 		return splitContent[0], splitContent[1]
 	}
-	return yamlTagContent, ""
+	return tagContent, ""
 }
 
 // Gets the schema definition link of a resource
@@ -275,9 +275,6 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 	pkgDefs := make(Definitions)
 	pkgExternalTypes := make(ExternalReferences)
 
-	fmt.Println("referencedTypes: ")
-	debugPrint(referencedTypes)
-
 	listOfFiles := curPackage.ListFiles()
 	for _, fileName := range listOfFiles {
 		fmt.Println("Processing file ", fileName)
@@ -286,15 +283,7 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 		mergeExternalRefs(pkgExternalTypes, fileExternalRefs)
 	}
 
-	// fmt.Print("AllDefs: ")
-	// debugPrint(pkgDefs)
-
-	var allReachableTypes map[string]bool
-	// Prune unreferenced types
-	// if !containsAllTypes {
-	allReachableTypes = getReachableTypes(referencedTypes, pkgDefs)
-	fmt.Print("allReachableTypes: ")
-	debugPrint(allReachableTypes)
+	allReachableTypes := getReachableTypes(referencedTypes, pkgDefs)
 	for key := range pkgDefs {
 		if _, exists := allReachableTypes[key]; !exists {
 			delete(pkgDefs, key)
@@ -324,6 +313,7 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 func main() {
 	inputPath := flag.String("package-name", "", "Go package name")
 	outputPath := flag.String("output-file", "", "Output schema json path")
+	typeList := flag.String("types", "", "List of types")
 
 	flag.Parse()
 
@@ -335,12 +325,18 @@ func main() {
 		Definition:  &Definition{},
 		Definitions: make(map[string]*Definition)}
 	schema.Type = "object"
-	startingPoint := []string{"Configuration", "Revision", "Route", "Service"}
+	startingPoint := strings.Split(*typeList, ",")
 	startingPointMap := make(map[string]bool)
 	for i := range startingPoint {
 		startingPointMap[startingPoint[i]] = true
 	}
 	schema.Definitions = parseTypesInPackage(*inputPath, startingPointMap, true)
+	schema.Version = ""
+	schema.AnyOf = []*Definition{}
+
+	for _, typeName := range startingPoint {
+		schema.AnyOf = append(schema.AnyOf, &Definition{Ref: getDefLink(typeName)})
+	}
 
 	checkDefinitions(schema.Definitions, startingPointMap)
 

@@ -35,7 +35,6 @@ func (pruner *DefinitionPruner) Prune(ignoreUnknownTypes bool) map[string]bool {
 				panic("Unknown type")
 			}
 		}
-		fmt.Println("Visiting ", curType)
 		visitedDefs[curType] = true
 		curDef := pruner.definitions[curType]
 		queue = append(queue, processDefinition(curDef)...)

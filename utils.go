@@ -27,15 +27,6 @@ func jsonifyType(typeName string) string {
 	panic("jsonifyType called with a complex type")
 }
 
-func arrayContains(array []string, expectedItem string) bool {
-	for _, curItem := range array {
-		if curItem == expectedItem {
-			return true
-		}
-	}
-	return false
-}
-
 func mergeDefs(lhs Definitions, rhs Definitions) {
 	for key := range rhs {
 		_, ok := lhs[key]
