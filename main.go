@@ -53,18 +53,6 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	return tagContent, ""
 }
 
-// Gets the schema definition link of a resource
-func getDefLink(resourceName string) string {
-	return defPrefix + resourceName
-}
-
-// Gets the resource name from definitions url.
-// Eg, returns 'TypeName' from '#/definitions/TypeName'
-func getNameFromURL(url string) string {
-	slice := strings.Split(url, "/")
-	return slice[len(slice)-1]
-}
-
 func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 	def := &Definition{}
 	externalTypeRefs := []TypeReference{}

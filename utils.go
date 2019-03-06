@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 func isSimpleType(typeName string) bool {
@@ -55,4 +56,16 @@ func debugPrint(obj interface{}) {
 		panic("Error")
 	}
 	fmt.Println(string(b))
+}
+
+// Gets the schema definition link of a resource
+func getDefLink(resourceName string) string {
+	return defPrefix + resourceName
+}
+
+// Gets the resource name from definitions url.
+// Eg, returns 'TypeName' from '#/definitions/TypeName'
+func getNameFromURL(url string) string {
+	slice := strings.Split(url, "/")
+	return slice[len(slice)-1]
 }
