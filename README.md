@@ -1,22 +1,38 @@
-# Go YAML-annotated types to JSON schema converter
-[![Go Report Card](https://goreportcard.com/badge/github.com/redborian/go-yaml-to-jsonschema)](https://goreportcard.com/report/github.com/redborian/go-yaml-to-jsonschema)
-[![Go Doc](https://godoc.org/github.com/redborian/go-yaml-to-jsonschema?status.svg)](https://godoc.org/github.com/redborian/go-yaml-to-jsonschema)
+# Go annotated types to JSON schema converter
+[![Go Report Card](https://goreportcard.com/badge/github.com/redborian/go-types-to-jsonschema)](https://goreportcard.com/report/github.com/redborian/go-types-to-jsonschema)
+[![Go Doc](https://godoc.org/github.com/redborian/go-types-to-jsonschema?status.svg)](https://godoc.org/github.com/redborian/go-types-to-jsonschema)
 
-Command-line tool to convert yaml-annotated types specified in go file to json schema. It parses the Go file into an abstract-syntax-tree and generates its corresponding [json-schema](https://json-schema.org/) output.
+Command-line tool to convert annotated go types specified in a package to json schema. It parses the Go file into an abstract-syntax-tree and generates its corresponding [json-schema](https://json-schema.org/) output. If any of the types depend on types from other packages, they will also be recursively converted.
 
-### Input go file:
+## How it works
+The tool uses go parser to parse all the go files in the provided package. If it accesses types from other packages, it recursively processes those as well. It uses `go get` and `go list` commands to fetch and list files in a package. It is smart enough to not process types that are not relevant.
+
+## Example
+### Package contents
 ```go
+package types
+
 type Person struct {
   Name     string    `yaml:"name"`
   Age      int       `yaml:"age,omitempty"`
   Address  *Address  `yaml:"address,omitempty"`
 }
 
+type Car struct {
+  Make     string    `json:"make"`
+}
+
 type Address struct {
 }
 ```
 
-### Output json file:
+### Command to run
+```
+$> go build
+$> go-types-to-json --package-name="github.com/pkg/name" --output-file="output.json" --types="Person,Car"
+```
+
+### Contents of output.json
 ```json
 {
   "definitions": {
@@ -34,16 +50,17 @@ type Address struct {
       },
       "required": ["name"]
     },
-    "Address": { }
+    "Address": { },
+    "Car": {
+      "properties": {
+        "make": {
+          "type": "string"
+        }
+      },
+      "required": ["make"]
+    }
   }
 }
 ```
-
-## Running the tool
-Currently, the only way to run the tool is through `go run`
-1. Clone the repo
-2. `go run main.go --input-file="<Go-file-path>" --output-file="<Output-json-path>"`
-
-To flatten the generated schema by inlining "anyOf" nodes, use "--remove-allof=true" flag.
 
 Note: This is not an official Google product
