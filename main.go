@@ -58,46 +58,6 @@ func getDefLink(resourceName string) string {
 	return defPrefix + resourceName
 }
 
-// func parseIdentifier(identifier *ast.Ident) (*Definition, []TypeReference) {
-// 	definition := new(Definition)
-// 	externalTypeRefs := []TypeReference{}
-// 	switch identifier
-// }
-
-// Parses array type and returns its corresponding
-// schema definition.
-func parseArrayType(arrayType *ast.ArrayType) (*Definition, []TypeReference) {
-	definition := new(Definition)
-	// typeNameOfArray := getTypeNameOfArray(arrayType)
-	var typeNameOfArray string
-	externalTypeRefs := []TypeReference{}
-	switch arrayType.Elt.(type) {
-	case *ast.Ident:
-		identifier := arrayType.Elt.(*ast.Ident)
-		typeNameOfArray = identifier.Name
-	case *ast.StarExpr:
-		starType := arrayType.Elt.(*ast.StarExpr)
-		identifier := starType.X.(*ast.Ident)
-		typeNameOfArray = identifier.Name
-	case *ast.SelectorExpr:
-		selectorType := arrayType.Elt.(*ast.SelectorExpr)
-		packageAlias := selectorType.X.(*ast.Ident).Name
-		typeName := selectorType.Sel.Name
-		typeNameOfArray = typeName
-		externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-	}
-
-	definition.Items = new(Definition)
-	if isSimpleType(typeNameOfArray) {
-		definition.Items.Type = jsonifyType(typeNameOfArray)
-	} else {
-		definition.Items.Ref = getDefLink(typeNameOfArray)
-	}
-	definition.Type = "array"
-
-	return definition, externalTypeRefs
-}
-
 // Gets the resource name from definitions url.
 // Eg, returns 'TypeName' from '#/definitions/TypeName'
 func getNameFromURL(url string) string {
@@ -105,155 +65,144 @@ func getNameFromURL(url string) string {
 	return slice[len(slice)-1]
 }
 
-// Parses a struct type and returns its corresponding
-// schema definition.
-func parseStructType(structType *ast.StructType, structTypeName string, typeDescription string) (*Definition, []TypeReference) {
-	definition := &Definition{}
-	definition.Description = typeDescription
-	definition.Properties = make(map[string]*Definition)
-	definition.Required = []string{}
-	inlineDefinitions := []*Definition{}
-	// externalTypes := make(ExternalReferences)
+func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
+	def := &Definition{}
 	externalTypeRefs := []TypeReference{}
 
-	for _, field := range structType.Fields.List {
-		property := new(Definition)
-		yamlFieldName, option := extractFromTag(field.Tag)
+	def.Description = comment
 
-		if yamlFieldName == "" && option == "" {
-			continue
+	switch tt := t.(type) {
+	case *ast.Ident:
+		typeName := tt.Name
+		if isSimpleType(typeName) {
+			def.Type = jsonifyType(typeName)
+		} else {
+			def.Ref = getDefLink(typeName)
 		}
-
-		// If the 'inline' option is enabled, we need to merge
-		// the type with its parent definition. We do it with
-		// 'anyOf' json schema property.
-		if option == "inline" {
-			var typeName string
-			switch field.Type.(type) {
-			case *ast.Ident:
-				typeName = field.Type.(*ast.Ident).String()
-			case *ast.StarExpr:
-				typeName = field.Type.(*ast.StarExpr).X.(*ast.Ident).String()
-			case *ast.SelectorExpr:
-				selectorType := field.Type.(*ast.SelectorExpr)
-				packageAlias := selectorType.X.(*ast.Ident).Name
-				typeName = selectorType.Sel.Name
-				externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-			}
-			// if structTypeName == "Revision" {
-			// 	fmt.Print("REVISION ")
-			// 	fmt.Println(reflect.TypeOf(field.Type))
-			// }
-			inlinedDef := new(Definition)
-			inlinedDef.Ref = getDefLink(typeName)
-			inlineDefinitions = append(inlineDefinitions, inlinedDef)
-			continue
-		}
-		// if 'omitempty' is not present, then the field is required
-		if option != "omitempty" {
-			definition.Required = append(definition.Required, yamlFieldName)
-		}
-
-		switch field.Type.(type) {
+	case *ast.ArrayType:
+		arrayType := tt
+		var typeNameOfArray string
+		switch arrayType.Elt.(type) {
 		case *ast.Ident:
-			typeName := field.Type.(*ast.Ident).String()
-			if isSimpleType(typeName) {
-				property.Type = jsonifyType(typeName)
-			} else {
-				property.Ref = getDefLink(typeName)
-			}
-		case *ast.ArrayType:
-			arrayType := field.Type.(*ast.ArrayType)
-			var arrayExternalRef []TypeReference
-			property, arrayExternalRef = parseArrayType(arrayType)
-			if len(arrayExternalRef) == 1 {
-				externalTypeRefs = append(externalTypeRefs, arrayExternalRef[0])
-			}
-		case *ast.MapType:
-			mapType := field.Type.(*ast.MapType)
-			switch mapType.Value.(type) {
-			case *ast.Ident:
-				valueType := mapType.Value.(*ast.Ident)
-				property.AdditionalProperties = new(Definition)
-
-				if isSimpleType(valueType.Name) {
-					property.AdditionalProperties.Type = valueType.Name
-				} else {
-					property.AdditionalProperties.Ref = getDefLink(valueType.Name)
-				}
-			case *ast.InterfaceType:
-				// No op
-			}
-			property.Type = "object"
+			identifier := arrayType.Elt.(*ast.Ident)
+			typeNameOfArray = identifier.Name
+		case *ast.StarExpr:
+			starType := arrayType.Elt.(*ast.StarExpr)
+			identifier := starType.X.(*ast.Ident)
+			typeNameOfArray = identifier.Name
 		case *ast.SelectorExpr:
-			selectorType := field.Type.(*ast.SelectorExpr)
+			selectorType := arrayType.Elt.(*ast.SelectorExpr)
+			packageAlias := selectorType.X.(*ast.Ident).Name
+			typeName := selectorType.Sel.Name
+			typeNameOfArray = typeName
+			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+		}
+
+		def.Items = new(Definition)
+		if isSimpleType(typeNameOfArray) {
+			def.Items.Type = jsonifyType(typeNameOfArray)
+		} else {
+			def.Items.Ref = getDefLink(typeNameOfArray)
+		}
+		def.Type = "array"
+
+	case *ast.MapType:
+		mapType := tt
+		switch mapType.Value.(type) {
+		case *ast.Ident:
+			valueType := mapType.Value.(*ast.Ident)
+			def.AdditionalProperties = new(Definition)
+
+			if isSimpleType(valueType.Name) {
+				def.AdditionalProperties.Type = valueType.Name
+			} else {
+				def.AdditionalProperties.Ref = getDefLink(valueType.Name)
+			}
+		case *ast.InterfaceType:
+			// No op
+			panic("Map Interface Type")
+		}
+		def.Type = "object"
+	case *ast.SelectorExpr:
+		selectorType := tt
+		packageAlias := selectorType.X.(*ast.Ident).Name
+		typeName := selectorType.Sel.Name
+
+		def.Ref = getDefLink(typeName)
+		externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+	case *ast.StarExpr:
+		starExpr := tt
+		switch starExpr.X.(type) {
+		case *ast.Ident:
+			starType := starExpr.X.(*ast.Ident)
+			typeName := starType.Name
+
+			if isSimpleType(typeName) {
+				def.Type = jsonifyType(typeName)
+			} else {
+				def.Ref = getDefLink(typeName)
+			}
+		case *ast.SelectorExpr:
+			selectorType := starExpr.X.(*ast.SelectorExpr)
 			packageAlias := selectorType.X.(*ast.Ident).Name
 			typeName := selectorType.Sel.Name
 
-			property.Ref = getDefLink(typeName)
-			// Collect external references
-			// externalTypes[structTypeName] = append(externalTypes[structTypeName], TypeReference{typeName, packageAlias})
 			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-		case *ast.StarExpr:
-			starExpr := field.Type.(*ast.StarExpr)
-			// starType := starExpr.X.(*ast.Ident)
-			// typeName := starType.Name
-
-			// if isSimpleType(typeName) {
-			// 	property.Type = jsonifyType(typeName)
-			// } else {
-			// 	property.Ref = getDefLink(typeName)
-			// }
-			switch starExpr.X.(type) {
-			case *ast.Ident:
-				starType := starExpr.X.(*ast.Ident)
-				typeName := starType.Name
-
-				if isSimpleType(typeName) {
-					property.Type = jsonifyType(typeName)
-				} else {
-					property.Ref = getDefLink(typeName)
-				}
-			case *ast.SelectorExpr:
-				selectorType := starExpr.X.(*ast.SelectorExpr)
-				packageAlias := selectorType.X.(*ast.Ident).Name
-				typeName := selectorType.Sel.Name
-
-				externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-				// debugPrint(selectorType)
-				// externalTypes[]
-				// fmt.Printf("%+v\n", selectorType)
-				// fmt.Printf("TODO")
-				// panic("Stop Execution")
-			}
 		}
-		// Set the common properties here as the cases might
-		// overwrite 'property' pointer.
-		property.Description = field.Doc.Text()
+	case *ast.StructType:
+		structType := tt
+		inlineDefinitions := []*Definition{}
+		for _, field := range structType.Fields.List {
+			yamlName, option := extractFromTag(field.Tag)
+			if option == "inline" {
+				var typeName string
+				switch field.Type.(type) {
+				case *ast.Ident:
+					typeName = field.Type.(*ast.Ident).String()
+				case *ast.StarExpr:
+					typeName = field.Type.(*ast.StarExpr).X.(*ast.Ident).String()
+				case *ast.SelectorExpr:
+					selectorType := field.Type.(*ast.SelectorExpr)
+					packageAlias := selectorType.X.(*ast.Ident).Name
+					typeName = selectorType.Sel.Name
+					externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+				}
+				inlinedDef := new(Definition)
+				inlinedDef.Ref = getDefLink(typeName)
+				inlineDefinitions = append(inlineDefinitions, inlinedDef)
+				def.AnyOf = append(def.AnyOf, &Definition{Ref: getDefLink(typeName)})
+				continue
+			}
 
-		definition.Properties[yamlFieldName] = property
+			if yamlName == "" {
+				continue
+			}
+
+			if option == "required" {
+				def.Required = append(def.Required, yamlName)
+			}
+
+			if def.Properties == nil {
+				def.Properties = make(map[string]*Definition)
+			}
+
+			propDef, propExternalTypeDefs := newDefinition(field.Type, field.Doc.Text())
+			externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
+			def.Properties[yamlName] = propDef
+		}
+		if len(inlineDefinitions) != 0 {
+			childDef := def
+			parentDef := new(Definition)
+			parentDef.AllOf = inlineDefinitions
+
+			if len(childDef.Properties) != 0 {
+				parentDef.AllOf = append(inlineDefinitions, childDef)
+			}
+			def = parentDef
+		}
 	}
 
-	if len(inlineDefinitions) == 0 {
-		// if len(definition.Properties) == 0 {
-		// 	return nil, nil
-		// }
-		// There are no inlined definitions
-		return definition, externalTypeRefs
-	}
-
-	// There are inlined definitions; we need to set
-	// the "anyOf" property of a new parent node and attach
-	// the inline definitions, along with the currently
-	// parsed definition
-	parentDefinition := new(Definition)
-	parentDefinition.AllOf = inlineDefinitions
-
-	if len(definition.Properties) != 0 {
-		parentDefinition.AllOf = append(inlineDefinitions, definition)
-	}
-
-	return parentDefinition, externalTypeRefs
+	return def, externalTypeRefs
 }
 
 func getReachableTypes(startingTypes map[string]bool, definitions Definitions) map[string]bool {
@@ -288,42 +237,9 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 			typeDescription := declaration.Doc.Text()
 
 			fmt.Println("Generating schema definition for type:", typeName)
-
-			// Currently schema generation only takes Structs
-			// and Array types into account.
-			switch typeSpec.Type.(type) {
-			case *ast.ArrayType:
-				arrayType := typeSpec.Type.(*ast.ArrayType)
-				parsedArrayDef, referencedTypes := parseArrayType(arrayType)
-
-				definitions[typeName] = parsedArrayDef
-				externalRefs[typeName] = referencedTypes
-				// TODO
-				// collectExternalTypeFromArray(externalTypes, arrayType)
-			case *ast.StructType:
-				structType := typeSpec.Type.(*ast.StructType)
-				parsedStructDef, referencedTypes := parseStructType(structType, typeName, typeDescription)
-				// mergeExternalRefs(externalRefs, referencedTypes)
-				if parsedStructDef != nil && referencedTypes != nil {
-					externalRefs[typeName] = referencedTypes
-					definitions[typeName] = parsedStructDef
-				}
-			case *ast.Ident:
-				identType := typeSpec.Type.(*ast.Ident)
-				def := &Definition{}
-				if isSimpleType(identType.Name) {
-					def.Type = jsonifyType(identType.Name)
-				} else {
-					def.Ref = getDefLink(identType.Name)
-				}
-				def.Description = typeDescription
-				definitions[typeName] = def
-			}
-			// if typeName == "UID" {
-			// 	ident := typeSpec.Type.(*ast.Ident)
-			// 	fmt.Println("REFLECTION", reflect.TypeOf(typeSpec.Type))
-			// 	debugPrint(ident)
-			// }
+			def, refTypes := newDefinition(typeSpec.Type, typeDescription)
+			definitions[typeName] = def
+			externalRefs[typeName] = refTypes
 		}
 	}
 
@@ -347,9 +263,6 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 			externalRefs[typeName][i].PackageName = importPaths[ref.PackageName]
 		}
 	}
-
-	// fmt.Print("ImportPaths: ")
-	// debugPrint(importPaths)
 
 	return definitions, externalRefs
 }
@@ -388,17 +301,6 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 			delete(pkgExternalTypes, key)
 		}
 	}
-	// }
-
-	// fmt.Print("PrunedDefs: ")
-	// debugPrint(pkgDefs)
-
-	// Expand external references
-	// Assume no cyclic references across files
-	// fmt.Println("%+v", node.Imports)
-	// debugPrint(node.Imports)
-	// debugPrint(externalTypes)
-	// debugPrint(importPaths)
 
 	uniquePkgTypeRefs := make(map[string]map[string]bool)
 	for _, item := range pkgExternalTypes {
@@ -410,44 +312,18 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 		}
 	}
 
-	// TODO remove this condition
-	// if containsAllTypes {
 	for childPkgName := range uniquePkgTypeRefs {
 		childTypes := uniquePkgTypeRefs[childPkgName]
 		childDefs := parseTypesInPackage(childPkgName, childTypes, false)
 		mergeDefs(pkgDefs, childDefs)
 	}
-	// }
-
-	// fmt.Println("PackageDefs for package ", pkgName, ": ")
-	// debugPrint(pkgDefs)
 
 	return pkgDefs
 }
 
-// func getUniqueImports(typeSubset []string, importLookup map[string][]string, includeAll bool) map[string]bool {
-// 	uniqueImports := make(map[string]bool)
-// 	if !includeAll {
-// 		for _, typeName := range typeSubset {
-// 			imports := importLookup[typeName]
-// 			for _, singleImport := range imports {
-// 				uniqueImports[singleImport] = true
-// 			}
-// 		}
-// 	} else {
-// 		for _, referencedTypes := range importLookup {
-// 			for _, singleImport := range referencedTypes {
-// 				uniqueImports[singleImport] = true
-// 			}
-// 		}
-// 	}
-// 	return uniqueImports
-// }
-
 func main() {
-	inputPath := flag.String("input-file", "", "Input go file path")
+	inputPath := flag.String("package-name", "", "Go package name")
 	outputPath := flag.String("output-file", "", "Output schema json path")
-	// removeAllOfs := flag.Bool("remove-allof", false, "Flattens the json schema by removing \"allOf\"s")
 
 	flag.Parse()
 
@@ -459,12 +335,6 @@ func main() {
 		Definition:  &Definition{},
 		Definitions: make(map[string]*Definition)}
 	schema.Type = "object"
-	// fmt.Println("%+v", node.Imports)
-	// b, err3 := json.Marshal(node.Imports)
-	// if err3 != nil {
-	// 	panic(err)
-	// }
-	// fmt.Println(string(b))
 	startingPoint := []string{"Configuration", "Revision", "Route", "Service"}
 	startingPointMap := make(map[string]bool)
 	for i := range startingPoint {
@@ -474,10 +344,7 @@ func main() {
 
 	checkDefinitions(schema.Definitions, startingPointMap)
 
-	// if *removeAllOfs {
-	// 	fmt.Println("Flattening the schema by removing \"anyOf\" nodes")
-	// flattenSchema(&schema)
-	// }
+	flattenSchema(&schema)
 
 	out, err := os.Create(*outputPath)
 	if err != nil {
