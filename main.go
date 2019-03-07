@@ -128,22 +128,27 @@ func newDefinition(t ast.Expr, comment string, importPaths map[string]string, cu
 		externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 	case *ast.StarExpr:
 		starExpr := tt
+		var typeName, packageAlias string
 		switch starExpr.X.(type) {
 		case *ast.Ident:
 			starType := starExpr.X.(*ast.Ident)
-			typeName := starType.Name
+			typeName = starType.Name
 
-			if isSimpleType(typeName) {
-				def.Type = jsonifyType(typeName)
+		case *ast.SelectorExpr:
+			selectorType := starExpr.X.(*ast.SelectorExpr)
+			packageAlias = selectorType.X.(*ast.Ident).Name
+			typeName = selectorType.Sel.Name
+
+			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+		}
+		if isSimpleType(typeName) {
+			def.Type = jsonifyType(typeName)
+		} else {
+			if packageAlias != "" {
+				def.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
 			} else {
 				def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
 			}
-			// case *ast.SelectorExpr:
-			// 	selectorType := starExpr.X.(*ast.SelectorExpr)
-			// 	packageAlias := selectorType.X.(*ast.Ident).Name
-			// 	typeName := selectorType.Sel.Name
-
-			// 	externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 		}
 	case *ast.StructType:
 		structType := tt
