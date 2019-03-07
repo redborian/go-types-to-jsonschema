@@ -63,6 +63,18 @@ func getDefLink(resourceName string) string {
 	return defPrefix + resourceName
 }
 
+func getFullName(resourceName string, prefix string) string {
+	if prefix == "" {
+		return resourceName
+	}
+	prefix = strings.Replace(prefix, "/", ".", -1)
+	return prefix + "." + resourceName
+}
+
+func getPrefixedDefLink(resourceName string, prefix string) string {
+	return defPrefix + getFullName(resourceName, prefix)
+}
+
 // Gets the resource name from definitions url.
 // Eg, returns 'TypeName' from '#/definitions/TypeName'
 func getNameFromURL(url string) string {
