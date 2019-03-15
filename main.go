@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+
+//   http://www.apache.org/licenses/LICENSE-2.0
+
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package main
 
 import (
@@ -46,6 +63,10 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	var tagContent, tagKey string
 	fmt.Sscanf(tagValue, `%s %s`, &tagKey, &tagContent)
 
+	if tagKey != "json:" && tagKey != "yaml:" {
+		return "", ""
+	}
+
 	if strings.Contains(tagContent, ",") {
 		splitContent := strings.Split(tagContent, ",")
 		return splitContent[0], splitContent[1]
@@ -53,7 +74,7 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	return tagContent, ""
 }
 
-func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
+func newDefinition(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*Definition, []TypeReference) {
 	def := &Definition{}
 	externalTypeRefs := []TypeReference{}
 
@@ -65,11 +86,11 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 		if isSimpleType(typeName) {
 			def.Type = jsonifyType(typeName)
 		} else {
-			def.Ref = getDefLink(typeName)
+			def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
 		}
 	case *ast.ArrayType:
 		arrayType := tt
-		var typeNameOfArray string
+		var typeNameOfArray, packageAlias string
 		switch arrayType.Elt.(type) {
 		case *ast.Ident:
 			identifier := arrayType.Elt.(*ast.Ident)
@@ -80,7 +101,7 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 			typeNameOfArray = identifier.Name
 		case *ast.SelectorExpr:
 			selectorType := arrayType.Elt.(*ast.SelectorExpr)
-			packageAlias := selectorType.X.(*ast.Ident).Name
+			packageAlias = selectorType.X.(*ast.Ident).Name
 			typeName := selectorType.Sel.Name
 			typeNameOfArray = typeName
 			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
@@ -90,7 +111,11 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 		if isSimpleType(typeNameOfArray) {
 			def.Items.Type = jsonifyType(typeNameOfArray)
 		} else {
-			def.Items.Ref = getDefLink(typeNameOfArray)
+			if packageAlias != "" {
+				def.Items.Ref = getPrefixedDefLink(typeNameOfArray, importPaths[packageAlias])
+			} else {
+				def.Items.Ref = getPrefixedDefLink(typeNameOfArray, curPkgPrefix)
+			}
 		}
 		def.Type = "array"
 
@@ -104,7 +129,7 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 			if isSimpleType(valueType.Name) {
 				def.AdditionalProperties.Type = valueType.Name
 			} else {
-				def.AdditionalProperties.Ref = getDefLink(valueType.Name)
+				def.AdditionalProperties.Ref = getPrefixedDefLink(valueType.Name, curPkgPrefix)
 			}
 		case *ast.InterfaceType:
 			// No op
@@ -116,55 +141,86 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 		packageAlias := selectorType.X.(*ast.Ident).Name
 		typeName := selectorType.Sel.Name
 
-		def.Ref = getDefLink(typeName)
+		def.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
 		externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 	case *ast.StarExpr:
 		starExpr := tt
+		var typeName, packageAlias string
 		switch starExpr.X.(type) {
 		case *ast.Ident:
 			starType := starExpr.X.(*ast.Ident)
-			typeName := starType.Name
+			typeName = starType.Name
 
-			if isSimpleType(typeName) {
-				def.Type = jsonifyType(typeName)
-			} else {
-				def.Ref = getDefLink(typeName)
-			}
 		case *ast.SelectorExpr:
 			selectorType := starExpr.X.(*ast.SelectorExpr)
-			packageAlias := selectorType.X.(*ast.Ident).Name
-			typeName := selectorType.Sel.Name
+			packageAlias = selectorType.X.(*ast.Ident).Name
+			typeName = selectorType.Sel.Name
 
 			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+		}
+		if isSimpleType(typeName) {
+			def.Type = jsonifyType(typeName)
+		} else {
+			if packageAlias != "" {
+				def.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
+			} else {
+				def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
+			}
 		}
 	case *ast.StructType:
 		structType := tt
 		inlineDefinitions := []*Definition{}
 		for _, field := range structType.Fields.List {
 			yamlName, option := extractFromTag(field.Tag)
-			if option == "inline" {
-				var typeName string
-				switch field.Type.(type) {
+			var typeName, packageAlias string
+			switch field.Type.(type) {
+			case *ast.Ident:
+				typeName = field.Type.(*ast.Ident).String()
+			case *ast.StarExpr:
+				// starType = field.Type.(*ast.StarExpr).X.(*ast.Ident).String()
+				starType := field.Type.(*ast.StarExpr)
+				switch starType.X.(type) {
 				case *ast.Ident:
-					typeName = field.Type.(*ast.Ident).String()
-				case *ast.StarExpr:
-					typeName = field.Type.(*ast.StarExpr).X.(*ast.Ident).String()
+					typeName = starType.X.(*ast.Ident).Name
 				case *ast.SelectorExpr:
-					selectorType := field.Type.(*ast.SelectorExpr)
-					packageAlias := selectorType.X.(*ast.Ident).Name
+					selectorType := starType.X.(*ast.SelectorExpr)
+					packageAlias = selectorType.X.(*ast.Ident).Name
 					typeName = selectorType.Sel.Name
 					externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 				}
+			case *ast.SelectorExpr:
+				selectorType := field.Type.(*ast.SelectorExpr)
+				// var packageAlias string
+				// switch selectorType.X.(type) {
+				// case *ast.Ident:
+				packageAlias = selectorType.X.(*ast.Ident).Name
+				// case *ast.SelectorExpr:
+				// 	subSelectorType := selectorType.X.(*ast.SelectorExpr)
+				// 	packageAlias = subSelectorType.X.(*ast.Ident).Name
+				// }
+				typeName = selectorType.Sel.Name
+				externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+			}
+			if option == "inline" {
 				inlinedDef := new(Definition)
-				inlinedDef.Ref = getDefLink(typeName)
+				if packageAlias != "" {
+					inlinedDef.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
+				} else {
+					inlinedDef.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
+				}
 				inlineDefinitions = append(inlineDefinitions, inlinedDef)
-				def.AnyOf = append(def.AnyOf, &Definition{Ref: getDefLink(typeName)})
+				// def.AnyOf = append(def.AnyOf, &Definition{Ref: getPrefixedDefLink(typeName, curPkgPrefix)})
 				continue
 			}
 
-			if yamlName == "" {
+			if yamlName == "" || yamlName == "-" {
 				continue
 			}
+			// if yamlName == "-" {
+			// 	debugPrint(def)
+			// 	// debugPrint(structType)
+			// 	panic("yamlName is -")
+			// }
 
 			if option == "required" {
 				def.Required = append(def.Required, yamlName)
@@ -174,9 +230,13 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 				def.Properties = make(map[string]*Definition)
 			}
 
-			propDef, propExternalTypeDefs := newDefinition(field.Type, field.Doc.Text())
+			propDef, propExternalTypeDefs := newDefinition(field.Type, field.Doc.Text(), importPaths, curPkgPrefix)
 			externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
+			// if yamlName != "" && yamlName != "-" {
 			def.Properties[yamlName] = propDef
+			// } else {
+			// 	def.Properties[typeName] = propDef
+			// }
 		}
 		if len(inlineDefinitions) != 0 {
 			childDef := def
@@ -187,6 +247,10 @@ func newDefinition(t ast.Expr, comment string) (*Definition, []TypeReference) {
 				parentDef.AllOf = append(inlineDefinitions, childDef)
 			}
 			def = parentDef
+		} else {
+			// if def.Type == "" && len(def.Properties) == 0 {
+			// 	def.Type = "object"
+			// }
 		}
 	}
 
@@ -199,7 +263,7 @@ func getReachableTypes(startingTypes map[string]bool, definitions Definitions) m
 	return prunedTypes
 }
 
-func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
+func parseTypesInFile(filePath string, curPkgPrefix string) (Definitions, ExternalReferences) {
 	// Open the input go file and parse the Abstract Syntax Tree
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
@@ -209,6 +273,22 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 
 	definitions := make(Definitions)
 	externalRefs := make(ExternalReferences)
+
+	// Parse import statements to get "alias: pkgName" mapping
+	importPaths := make(map[string]string)
+	for _, importItem := range node.Imports {
+		pathValue := strings.Trim(importItem.Path.Value, "\"")
+		if importItem.Name != nil {
+			// Process aliased import
+			importPaths[importItem.Name.Name] = pathValue
+		} else if strings.Contains(pathValue, "/") {
+			// Process unnamed imports with "/"
+			segments := strings.Split(pathValue, "/")
+			importPaths[segments[len(segments)-1]] = pathValue
+		} else {
+			importPaths[pathValue] = pathValue
+		}
+	}
 
 	for _, i := range node.Decls {
 		declaration, ok := i.(*ast.GenDecl)
@@ -225,23 +305,9 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 			typeDescription := declaration.Doc.Text()
 
 			fmt.Println("Generating schema definition for type:", typeName)
-			def, refTypes := newDefinition(typeSpec.Type, typeDescription)
-			definitions[typeName] = def
-			externalRefs[typeName] = refTypes
-		}
-	}
-
-	// Parse import statements to get "alias: pkgName" mapping
-	importPaths := make(map[string]string)
-	for _, importItem := range node.Imports {
-		pathValue := strings.Trim(importItem.Path.Value, "\"")
-		if importItem.Name != nil {
-			// Process aliased import
-			importPaths[importItem.Name.Name] = pathValue
-		} else if strings.Contains(pathValue, "/") {
-			// Process unnamed imports with "/"
-			segments := strings.Split(pathValue, "/")
-			importPaths[segments[len(segments)-1]] = pathValue
+			def, refTypes := newDefinition(typeSpec.Type, typeDescription, importPaths, curPkgPrefix)
+			definitions[getFullName(typeName, curPkgPrefix)] = def
+			externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
 		}
 	}
 
@@ -255,8 +321,9 @@ func parseTypesInFile(filePath string) (Definitions, ExternalReferences) {
 	return definitions, externalRefs
 }
 
-func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, containsAllTypes bool) Definitions {
+func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage bool) Definitions {
 	fmt.Println("Fetching package ", pkgName)
+	debugPrint(referencedTypes)
 	curPackage := Package{pkgName}
 	curPackage.Fetch()
 
@@ -264,12 +331,28 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 	pkgExternalTypes := make(ExternalReferences)
 
 	listOfFiles := curPackage.ListFiles()
+	pkgPrefix := strings.Replace(pkgName, "/", ".", -1)
+	if rootPackage {
+		pkgPrefix = ""
+	}
+	fmt.Println("pkgPrefix=", pkgPrefix)
 	for _, fileName := range listOfFiles {
 		fmt.Println("Processing file ", fileName)
-		fileDefs, fileExternalRefs := parseTypesInFile(fileName)
+		fileDefs, fileExternalRefs := parseTypesInFile(fileName, pkgPrefix)
 		mergeDefs(pkgDefs, fileDefs)
 		mergeExternalRefs(pkgExternalTypes, fileExternalRefs)
 	}
+
+	// Add pkg prefix to referencedTypes
+	newReferencedTypes := make(map[string]bool)
+	for key := range referencedTypes {
+		altKey := getFullName(key, pkgPrefix)
+		newReferencedTypes[altKey] = referencedTypes[key]
+	}
+	referencedTypes = newReferencedTypes
+
+	fmt.Println("referencedTypes")
+	debugPrint(referencedTypes)
 
 	allReachableTypes := getReachableTypes(referencedTypes, pkgDefs)
 	for key := range pkgDefs {
@@ -278,6 +361,12 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, contai
 			delete(pkgExternalTypes, key)
 		}
 	}
+	fmt.Println("allReachableTypes")
+	debugPrint(allReachableTypes)
+	fmt.Println("pkgDefs")
+	debugPrint(pkgDefs)
+	fmt.Println("pkgExternalTypes")
+	debugPrint(pkgExternalTypes)
 
 	uniquePkgTypeRefs := make(map[string]map[string]bool)
 	for _, item := range pkgExternalTypes {
@@ -326,9 +415,16 @@ func main() {
 		schema.AnyOf = append(schema.AnyOf, &Definition{Ref: getDefLink(typeName)})
 	}
 
-	checkDefinitions(schema.Definitions, startingPointMap)
-
 	flattenSchema(&schema)
+
+	reachableTypes := getReachableTypes(startingPointMap, schema.Definitions)
+	for key := range schema.Definitions {
+		if _, exists := reachableTypes[key]; !exists {
+			delete(schema.Definitions, key)
+		}
+	}
+
+	checkDefinitions(schema.Definitions, startingPointMap)
 
 	out, err := os.Create(*outputPath)
 	if err != nil {
