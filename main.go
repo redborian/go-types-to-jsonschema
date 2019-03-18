@@ -71,6 +71,7 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	return tagContent, ""
 }
 
+// Get Schema given ast.Expr
 func newDefinition(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*Definition, []TypeReference) {
 	def := &Definition{}
 	externalTypeRefs := []TypeReference{}
@@ -385,13 +386,34 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPa
 }
 
 func main() {
-	inputPath := flag.String("package-name", "", "Go package name")
-	outputPath := flag.String("output-file", "", "Output schema json path")
+	op := &Options{}
+
+	flag.StringVar(&op.InputPackage, "package-name", "", "Go package name")
+	flag.StringVar(&op.OutputPath, "output-file", "", "Output schema json path")
+	// TODO: use cobra StringSlice https://godoc.org/github.com/spf13/pflag#StringSlice
 	typeList := flag.String("types", "", "List of types")
+	flag.BoolVar(&op.Flatten, "flatten schema", false, "If flatten the schema using ref tag")
 
 	flag.Parse()
 
-	if len(*inputPath) == 0 || len(*outputPath) == 0 {
+	op.Types = strings.Split(*typeList, ",")
+
+	op.Generate()
+}
+
+type Options struct {
+	// InputPackage is the path of the input package that contains source files.
+	InputPackage string
+	// OutputPath is the path that the schema will be written to.
+	OutputPath string
+	// Types is a list of target types.
+	Types []string
+	// Flatten contains if we use a flattened structure or a embedded structure.
+	Flatten bool
+}
+
+func (op *Options) Generate() {
+	if len(op.InputPackage) == 0 || len(op.OutputPath) == 0 {
 		log.Panic("Both input path and output paths need to be set")
 	}
 
@@ -399,20 +421,20 @@ func main() {
 		Definition:  &Definition{},
 		Definitions: make(map[string]*Definition)}
 	schema.Type = "object"
-	startingPoint := strings.Split(*typeList, ",")
 	startingPointMap := make(map[string]bool)
-	for i := range startingPoint {
-		startingPointMap[startingPoint[i]] = true
+	for i := range op.Types {
+		startingPointMap[op.Types[i]] = true
 	}
-	schema.Definitions = parseTypesInPackage(*inputPath, startingPointMap, true)
+	schema.Definitions = parseTypesInPackage(op.InputPackage, startingPointMap, true)
 	schema.Version = ""
 	schema.AnyOf = []*Definition{}
 
-	for _, typeName := range startingPoint {
+	for _, typeName := range op.Types {
 		schema.AnyOf = append(schema.AnyOf, &Definition{Ref: getDefLink(typeName)})
 	}
 
-	flattenSchema(&schema)
+	// flattenAllOf only flattens allOf tags
+	flattenAllOf(&schema)
 
 	reachableTypes := getReachableTypes(startingPointMap, schema.Definitions)
 	for key := range schema.Definitions {
@@ -423,7 +445,17 @@ func main() {
 
 	checkDefinitions(schema.Definitions, startingPointMap)
 
-	out, err := os.Create(*outputPath)
+	if !op.Flatten {
+		embedSchema(schema.Definitions, startingPointMap)
+
+		newDefs := Definitions{}
+		for name := range startingPointMap {
+			newDefs[name] = schema.Definitions[name]
+		}
+		schema.Definitions = newDefs
+	}
+
+	out, err := os.Create(op.OutputPath)
 	if err != nil {
 		log.Panic(err)
 	}
