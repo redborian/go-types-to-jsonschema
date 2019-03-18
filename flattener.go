@@ -14,7 +14,7 @@
 
 package main
 
-// Recursively flattens "anyOf" tags. If there is cyclic
+// Recursively flattens "allOf" tags. If there is cyclic
 // dependency, execution is aborted.
 func recursiveFlatten(schema *Schema, definition *Definition, defName string, visited *map[string]bool) *Definition {
 	if len(definition.AllOf) == 0 {
@@ -61,8 +61,8 @@ func mergeDefinitions(lhsDef *Definition, rhsDef *Definition) {
 	// }
 }
 
-// Flattens the schema by inlining 'anyOf' tags.
-func flattenSchema(schema *Schema) {
+// Flattens the schema by inlining 'allOf' tags.
+func flattenAllOf(schema *Schema) {
 	for nameOfDef, def := range schema.Definitions {
 		visited := make(map[string]bool)
 		schema.Definitions[nameOfDef] = recursiveFlatten(schema, def, nameOfDef, &visited)
