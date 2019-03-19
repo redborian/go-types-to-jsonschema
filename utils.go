@@ -21,7 +21,10 @@ import (
 )
 
 func isSimpleType(typeName string) bool {
-	return typeName == "string" || typeName == "int" || typeName == "int32" || typeName == "int64" || typeName == "bool"
+	return typeName == "string" || typeName == "int" ||
+		typeName == "int32" || typeName == "int64" ||
+		typeName == "bool" || typeName == "byte" ||
+		typeName == "float32" || typeName == "float64"
 }
 
 // Converts the typeName simple type to json type
@@ -37,6 +40,12 @@ func jsonifyType(typeName string) string {
 		return "number"
 	case "int64":
 		return "number"
+	case "float32":
+		return "number"
+	case "float64":
+		return "number"
+	case "byte":
+		return "string"
 	}
 	fmt.Println("jsonifyType called with a complex type ", typeName)
 	panic("jsonifyType called with a complex type")
