@@ -21,9 +21,12 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/ioutil"
 	"log"
 	"os"
 	"strings"
+
+	"github.com/ghodss/yaml"
 )
 
 const defPrefix = "#/definitions/"
@@ -393,6 +396,7 @@ func main() {
 	// TODO: use cobra StringSlice https://godoc.org/github.com/spf13/pflag#StringSlice
 	typeList := flag.String("types", "", "List of types")
 	flag.BoolVar(&op.Flatten, "flatten schema", false, "If flatten the schema using ref tag")
+	flag.StringVar(&op.OutputFormat, "output-format", "json", "Output format of the schema")
 
 	flag.Parse()
 
@@ -410,6 +414,8 @@ type Options struct {
 	Types []string
 	// Flatten contains if we use a flattened structure or a embedded structure.
 	Flatten bool
+	// OutputFormat should be either json or yaml. Default to json
+	OutputFormat string
 }
 
 func (op *Options) Generate() {
@@ -460,13 +466,26 @@ func (op *Options) Generate() {
 		log.Panic(err)
 	}
 
-	enc := json.NewEncoder(out)
-	enc.SetIndent("", "  ")
-	err = enc.Encode(schema)
-	if err2 := out.Close(); err == nil {
-		err = err2
-	}
-	if err != nil {
-		log.Panic(err)
+	switch strings.ToLower(op.OutputFormat) {
+	// default to json
+	case "json", "":
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		err = enc.Encode(schema)
+		if err2 := out.Close(); err == nil {
+			err = err2
+		}
+		if err != nil {
+			log.Panic(err)
+		}
+	case "yaml":
+		m, err := yaml.Marshal(schema)
+		if err != nil {
+			log.Panic(err)
+		}
+		err = ioutil.WriteFile(op.OutputPath, m, 0644)
+		if err != nil {
+			log.Panic(err)
+		}
 	}
 }
