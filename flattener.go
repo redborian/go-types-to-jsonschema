@@ -14,9 +14,13 @@
 
 package main
 
+import (
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+)
+
 // Recursively flattens "allOf" tags. If there is cyclic
 // dependency, execution is aborted.
-func recursiveFlatten(schema *Schema, definition *Definition, defName string, visited *map[string]bool) *Definition {
+func recursiveFlatten(schema *v1beta1.JSONSchemaProps, definition *v1beta1.JSONSchemaProps, defName string, visited *map[string]bool) *v1beta1.JSONSchemaProps {
 	if len(definition.AllOf) == 0 {
 		return definition
 	}
@@ -26,16 +30,17 @@ func recursiveFlatten(schema *Schema, definition *Definition, defName string, vi
 	}
 	(*visited)[defName] = true
 
-	aggregatedDef := new(Definition)
+	aggregatedDef := new(v1beta1.JSONSchemaProps)
 	for _, allOfDef := range definition.AllOf {
-		var newDef *Definition
-		if allOfDef.Ref != "" {
+		var newDef *v1beta1.JSONSchemaProps
+		if allOfDef.Ref != nil && len(*allOfDef.Ref) > 0 {
 			// If the definition has $ref url, fetch the referred resource
 			// after flattening it.
-			nameOfRef := getNameFromURL(allOfDef.Ref)
-			newDef = recursiveFlatten(schema, schema.Definitions[nameOfRef], nameOfRef, visited)
+			nameOfRef := getNameFromURL(*allOfDef.Ref)
+			def := schema.Definitions[nameOfRef]
+			newDef = recursiveFlatten(schema, &def, nameOfRef, visited)
 		} else {
-			newDef = allOfDef
+			newDef = &allOfDef
 		}
 		mergeDefinitions(aggregatedDef, newDef)
 	}
@@ -46,25 +51,27 @@ func recursiveFlatten(schema *Schema, definition *Definition, defName string, vi
 
 // Merges the properties from the 'rhsDef' to the 'lhsDef'.
 // Also transfers the description as well.
-func mergeDefinitions(lhsDef *Definition, rhsDef *Definition) {
+func mergeDefinitions(lhsDef *v1beta1.JSONSchemaProps, rhsDef *v1beta1.JSONSchemaProps) {
+	if lhsDef == nil || rhsDef == nil {
+		return
+	}
 	// At this point, both defs will not have any 'AnyOf' defs.
 	// 1. Add all the properties from rhsDef to lhsDef
 	if lhsDef.Properties == nil {
-		lhsDef.Properties = make(map[string]*Definition)
+		lhsDef.Properties = make(map[string]v1beta1.JSONSchemaProps)
 	}
-	for propKey, propValue := range rhsDef.Properties {
-		lhsDef.Properties[propKey] = propValue
+	for propKey := range rhsDef.Properties {
+		lhsDef.Properties[propKey] = rhsDef.Properties[propKey]
 	}
 	// 2. Transfer the description
-	// if len(lhsDef.Description) == 0 {
 	lhsDef.Description = rhsDef.Description
-	// }
 }
 
 // Flattens the schema by inlining 'allOf' tags.
-func flattenAllOf(schema *Schema) {
-	for nameOfDef, def := range schema.Definitions {
+func flattenAllOf(schema *v1beta1.JSONSchemaProps) {
+	for nameOfDef := range schema.Definitions {
 		visited := make(map[string]bool)
-		schema.Definitions[nameOfDef] = recursiveFlatten(schema, def, nameOfDef, &visited)
+		def := schema.Definitions[nameOfDef]
+		schema.Definitions[nameOfDef] = *recursiveFlatten(schema, &def, nameOfDef, &visited)
 	}
 }

@@ -27,6 +27,8 @@ import (
 	"strings"
 
 	"github.com/ghodss/yaml"
+
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 )
 
 const defPrefix = "#/definitions/"
@@ -74,9 +76,9 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 	return tagContent, ""
 }
 
-// Get Schema given ast.Expr
-func newDefinition(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*Definition, []TypeReference) {
-	def := &Definition{}
+// Get v1beta1.JSONSchemaProps given ast.Expr
+func newDefinition(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
+	def := &v1beta1.JSONSchemaProps{}
 	externalTypeRefs := []TypeReference{}
 
 	def.Description = comment
@@ -108,14 +110,17 @@ func newDefinition(t ast.Expr, comment string, importPaths map[string]string, cu
 			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 		}
 
-		def.Items = new(Definition)
+		if def.Items == nil {
+			def.Items = &v1beta1.JSONSchemaPropsOrArray{}
+		}
+		def.Items.Schema = new(v1beta1.JSONSchemaProps)
 		if isSimpleType(typeNameOfArray) {
-			def.Items.Type = jsonifyType(typeNameOfArray)
+			def.Items.Schema.Type = jsonifyType(typeNameOfArray)
 		} else {
 			if packageAlias != "" {
-				def.Items.Ref = getPrefixedDefLink(typeNameOfArray, importPaths[packageAlias])
+				def.Items.Schema.Ref = getPrefixedDefLink(typeNameOfArray, importPaths[packageAlias])
 			} else {
-				def.Items.Ref = getPrefixedDefLink(typeNameOfArray, curPkgPrefix)
+				def.Items.Schema.Ref = getPrefixedDefLink(typeNameOfArray, curPkgPrefix)
 			}
 		}
 		def.Type = "array"
@@ -125,12 +130,15 @@ func newDefinition(t ast.Expr, comment string, importPaths map[string]string, cu
 		switch mapType.Value.(type) {
 		case *ast.Ident:
 			valueType := mapType.Value.(*ast.Ident)
-			def.AdditionalProperties = new(Definition)
+			if def.AdditionalProperties == nil {
+				def.AdditionalProperties = &v1beta1.JSONSchemaPropsOrBool{}
+			}
+			def.AdditionalProperties.Schema = new(v1beta1.JSONSchemaProps)
 
 			if isSimpleType(valueType.Name) {
-				def.AdditionalProperties.Type = valueType.Name
+				def.AdditionalProperties.Schema.Type = valueType.Name
 			} else {
-				def.AdditionalProperties.Ref = getPrefixedDefLink(valueType.Name, curPkgPrefix)
+				def.AdditionalProperties.Schema.Ref = getPrefixedDefLink(valueType.Name, curPkgPrefix)
 			}
 		case *ast.InterfaceType:
 			// No op
@@ -170,7 +178,7 @@ func newDefinition(t ast.Expr, comment string, importPaths map[string]string, cu
 		}
 	case *ast.StructType:
 		structType := tt
-		inlineDefinitions := []*Definition{}
+		inlineDefinitions := []v1beta1.JSONSchemaProps{}
 		for _, field := range structType.Fields.List {
 			yamlName, option := extractFromTag(field.Tag)
 			var typeName, packageAlias string
@@ -203,49 +211,44 @@ func newDefinition(t ast.Expr, comment string, importPaths map[string]string, cu
 				externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
 			}
 			if option == "inline" {
-				inlinedDef := new(Definition)
+				inlinedDef := v1beta1.JSONSchemaProps{}
 				if packageAlias != "" {
 					inlinedDef.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
 				} else {
 					inlinedDef.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
 				}
 				inlineDefinitions = append(inlineDefinitions, inlinedDef)
-				// def.AnyOf = append(def.AnyOf, &Definition{Ref: getPrefixedDefLink(typeName, curPkgPrefix)})
+				// def.AnyOf = append(def.AnyOf, v1beta1.JSONSchemaProps{Ref: getPrefixedDefLink(typeName, curPkgPrefix)})
 				continue
 			}
 
 			if yamlName == "" || yamlName == "-" {
 				continue
 			}
-			// if yamlName == "-" {
-			// 	debugPrint(def)
-			// 	// debugPrint(structType)
-			// 	panic("yamlName is -")
-			// }
 
 			if option == "required" {
 				def.Required = append(def.Required, yamlName)
 			}
 
 			if def.Properties == nil {
-				def.Properties = make(map[string]*Definition)
+				def.Properties = make(map[string]v1beta1.JSONSchemaProps)
 			}
 
 			propDef, propExternalTypeDefs := newDefinition(field.Type, field.Doc.Text(), importPaths, curPkgPrefix)
 			externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
 			// if yamlName != "" && yamlName != "-" {
-			def.Properties[yamlName] = propDef
+			def.Properties[yamlName] = *propDef
 			// } else {
 			// 	def.Properties[typeName] = propDef
 			// }
 		}
 		if len(inlineDefinitions) != 0 {
 			childDef := def
-			parentDef := new(Definition)
+			parentDef := new(v1beta1.JSONSchemaProps)
 			parentDef.AllOf = inlineDefinitions
 
 			if len(childDef.Properties) != 0 {
-				parentDef.AllOf = append(inlineDefinitions, childDef)
+				parentDef.AllOf = append(inlineDefinitions, *childDef)
 			}
 			def = parentDef
 		} else {
@@ -258,13 +261,13 @@ func newDefinition(t ast.Expr, comment string, importPaths map[string]string, cu
 	return def, externalTypeRefs
 }
 
-func getReachableTypes(startingTypes map[string]bool, definitions Definitions) map[string]bool {
+func getReachableTypes(startingTypes map[string]bool, definitions v1beta1.JSONSchemaDefinitions) map[string]bool {
 	pruner := DefinitionPruner{definitions, startingTypes}
 	prunedTypes := pruner.Prune(true)
 	return prunedTypes
 }
 
-func parseTypesInFile(filePath string, curPkgPrefix string) (Definitions, ExternalReferences) {
+func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaDefinitions, ExternalReferences) {
 	// Open the input go file and parse the Abstract Syntax Tree
 	fset := token.NewFileSet()
 	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
@@ -272,7 +275,7 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (Definitions, Extern
 		log.Fatal(err)
 	}
 
-	definitions := make(Definitions)
+	definitions := make(v1beta1.JSONSchemaDefinitions)
 	externalRefs := make(ExternalReferences)
 
 	// Parse import statements to get "alias: pkgName" mapping
@@ -307,7 +310,7 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (Definitions, Extern
 
 			fmt.Println("Generating schema definition for type:", typeName)
 			def, refTypes := newDefinition(typeSpec.Type, typeDescription, importPaths, curPkgPrefix)
-			definitions[getFullName(typeName, curPkgPrefix)] = def
+			definitions[getFullName(typeName, curPkgPrefix)] = *def
 			externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
 		}
 	}
@@ -322,13 +325,13 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (Definitions, Extern
 	return definitions, externalRefs
 }
 
-func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage bool) Definitions {
+func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage bool) v1beta1.JSONSchemaDefinitions {
 	fmt.Println("Fetching package ", pkgName)
 	debugPrint(referencedTypes)
 	curPackage := Package{pkgName}
 	curPackage.Fetch()
 
-	pkgDefs := make(Definitions)
+	pkgDefs := make(v1beta1.JSONSchemaDefinitions)
 	pkgExternalTypes := make(ExternalReferences)
 
 	listOfFiles := curPackage.ListFiles()
@@ -423,20 +426,17 @@ func (op *Options) Generate() {
 		log.Panic("Both input path and output paths need to be set")
 	}
 
-	schema := Schema{
-		Definition:  &Definition{},
-		Definitions: make(map[string]*Definition)}
+	schema := v1beta1.JSONSchemaProps{Definitions: make(map[string]v1beta1.JSONSchemaProps)}
 	schema.Type = "object"
 	startingPointMap := make(map[string]bool)
 	for i := range op.Types {
 		startingPointMap[op.Types[i]] = true
 	}
 	schema.Definitions = parseTypesInPackage(op.InputPackage, startingPointMap, true)
-	schema.Version = ""
-	schema.AnyOf = []*Definition{}
+	schema.AnyOf = []v1beta1.JSONSchemaProps{}
 
 	for _, typeName := range op.Types {
-		schema.AnyOf = append(schema.AnyOf, &Definition{Ref: getDefLink(typeName)})
+		schema.AnyOf = append(schema.AnyOf, v1beta1.JSONSchemaProps{Ref: getDefLink(typeName)})
 	}
 
 	// flattenAllOf only flattens allOf tags
@@ -452,9 +452,9 @@ func (op *Options) Generate() {
 	checkDefinitions(schema.Definitions, startingPointMap)
 
 	if !op.Flatten {
-		embedSchema(schema.Definitions, startingPointMap)
+		schema.Definitions = embedSchema(schema.Definitions, startingPointMap)
 
-		newDefs := Definitions{}
+		newDefs := v1beta1.JSONSchemaDefinitions{}
 		for name := range startingPointMap {
 			newDefs[name] = schema.Definitions[name]
 		}
