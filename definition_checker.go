@@ -14,9 +14,13 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
 
-func checkDefinitions(defs Definitions, startingTypes map[string]bool) {
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+)
+
+func checkDefinitions(defs v1beta1.JSONSchemaDefinitions, startingTypes map[string]bool) {
 	fmt.Printf("Type checking Starting expecting %d types\n", len(defs))
 	pruner := DefinitionPruner{defs, startingTypes}
 	newDefs := pruner.Prune(false)

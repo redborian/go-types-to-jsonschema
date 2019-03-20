@@ -14,11 +14,15 @@
 
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+)
 
 // DefinitionPruner prunes unwanted definitions
 type DefinitionPruner struct {
-	definitions   Definitions
+	definitions   v1beta1.JSONSchemaDefinitions
 	startingTypes map[string]bool
 }
 
@@ -51,50 +55,55 @@ func (pruner *DefinitionPruner) Prune(ignoreUnknownTypes bool) map[string]bool {
 		}
 		visitedDefs[curType] = true
 		curDef := pruner.definitions[curType]
-		queue = append(queue, processDefinition(curDef)...)
+		queue = append(queue, processDefinition(&curDef)...)
 	}
 
 	return visitedDefs
 }
 
-func processDefinition(def *Definition) []string {
+func processDefinition(def *v1beta1.JSONSchemaProps) []string {
 	allTypes := []string{}
 	if def == nil {
 		return allTypes
 	}
-	if def.Ref != "" {
-		allTypes = append(allTypes, getNameFromURL(def.Ref))
+	if def.Ref != nil && len(*def.Ref) > 0 {
+		allTypes = append(allTypes, getNameFromURL(*def.Ref))
 	}
 	allTypes = append(allTypes, processDefinitionMap(def.Definitions)...)
 	allTypes = append(allTypes, processDefinitionMap(def.Properties)...)
 	allTypes = append(allTypes, processDefinitionArray(def.AllOf)...)
 	allTypes = append(allTypes, processDefinitionArray(def.AnyOf)...)
 	allTypes = append(allTypes, processDefinitionArray(def.OneOf)...)
-	allTypes = append(allTypes, processDefinition(def.AdditionalItems)...)
-	allTypes = append(allTypes, processDefinition(def.Items)...)
+	if def.AdditionalItems != nil {
+		allTypes = append(allTypes, processDefinition(def.AdditionalItems.Schema)...)
+	}
+	if def.Items != nil {
+		allTypes = append(allTypes, processDefinition(def.Items.Schema)...)
+	}
 	allTypes = append(allTypes, processDefinition(def.Not)...)
-	allTypes = append(allTypes, processDefinition(def.Media)...)
 	return allTypes
 }
 
-func processDefinitionMap(defMap map[string]*Definition) []string {
+func processDefinitionMap(defMap v1beta1.JSONSchemaDefinitions) []string {
 	allTypes := []string{}
 	if defMap == nil {
 		return allTypes
 	}
 	for key := range defMap {
-		allTypes = append(allTypes, processDefinition(defMap[key])...)
+		def := defMap[key]
+		allTypes = append(allTypes, processDefinition(&def)...)
 	}
 	return allTypes
 }
 
-func processDefinitionArray(defArray []*Definition) []string {
+func processDefinitionArray(defArray []v1beta1.JSONSchemaProps) []string {
 	allTypes := []string{}
 	if defArray == nil {
 		return allTypes
 	}
-	for _, def := range defArray {
-		allTypes = append(allTypes, processDefinition(def)...)
+	for i := range defArray {
+		def := defArray[i]
+		allTypes = append(allTypes, processDefinition(&def)...)
 	}
 	return allTypes
 }

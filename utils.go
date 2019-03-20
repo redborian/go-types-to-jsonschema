@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 )
 
 func isSimpleType(typeName string) bool {
@@ -51,11 +53,14 @@ func jsonifyType(typeName string) string {
 	panic("jsonifyType called with a complex type")
 }
 
-func mergeDefs(lhs Definitions, rhs Definitions) {
+func mergeDefs(lhs v1beta1.JSONSchemaDefinitions, rhs v1beta1.JSONSchemaDefinitions) {
+	if lhs == nil || rhs == nil {
+		return
+	}
 	for key := range rhs {
 		_, ok := lhs[key]
 		if ok {
-			fmt.Println("Definition ", key, " already present")
+			fmt.Println("JSONSchemaProps ", key, " already present")
 			continue
 		}
 		lhs[key] = rhs[key]
@@ -63,6 +68,9 @@ func mergeDefs(lhs Definitions, rhs Definitions) {
 }
 
 func mergeExternalRefs(lhs ExternalReferences, rhs ExternalReferences) {
+	if lhs == nil || rhs == nil {
+		return
+	}
 	for key := range rhs {
 		_, ok := lhs[key]
 		if !ok {
@@ -82,8 +90,9 @@ func debugPrint(obj interface{}) {
 }
 
 // Gets the schema definition link of a resource
-func getDefLink(resourceName string) string {
-	return defPrefix + resourceName
+func getDefLink(resourceName string) *string {
+	ret := defPrefix + resourceName
+	return &ret
 }
 
 func getFullName(resourceName string, prefix string) string {
@@ -94,8 +103,9 @@ func getFullName(resourceName string, prefix string) string {
 	return prefix + "." + resourceName
 }
 
-func getPrefixedDefLink(resourceName string, prefix string) string {
-	return defPrefix + getFullName(resourceName, prefix)
+func getPrefixedDefLink(resourceName string, prefix string) *string {
+	ret := defPrefix + getFullName(resourceName, prefix)
+	return &ret
 }
 
 // Gets the resource name from definitions url.
