@@ -51,13 +51,10 @@ func removeChar(str string, removedStr string) string {
 // and return this: ("myField", "omitempty")
 func extractFromTag(tag *ast.BasicLit) (string, string) {
 	if tag == nil || tag.Value == "" {
-		// log.Panic("Tag value is empty")
 		return "", ""
 	}
 	tagValue := tag.Value
-	// fmt.Println("TagValue is ", tagValue)
 
-	// return yamlFieldValue, yamlOptionValue
 	tagValue = removeChar(tagValue, "`")
 	tagValue = removeChar(tagValue, `"`)
 	tagValue = strings.TrimSpace(tagValue)
@@ -77,188 +74,107 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 }
 
 // Get v1beta1.JSONSchemaProps given ast.Expr
-func newDefinition(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
+func exprToSchema(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
 	def := &v1beta1.JSONSchemaProps{}
 	externalTypeRefs := []TypeReference{}
+	var typeName, pkgAlias string
 
 	def.Description = comment
 
 	switch tt := t.(type) {
 	case *ast.Ident:
-		typeName := tt.Name
-		if isSimpleType(typeName) {
-			def.Type = jsonifyType(typeName)
-		} else {
-			def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
-		}
+		typeName = tt.Name
 	case *ast.ArrayType:
-		arrayType := tt
-		var typeNameOfArray, packageAlias string
-		switch arrayType.Elt.(type) {
-		case *ast.Ident:
-			identifier := arrayType.Elt.(*ast.Ident)
-			typeNameOfArray = identifier.Name
-		case *ast.StarExpr:
-			starType := arrayType.Elt.(*ast.StarExpr)
-			identifier := starType.X.(*ast.Ident)
-			typeNameOfArray = identifier.Name
-		case *ast.SelectorExpr:
-			selectorType := arrayType.Elt.(*ast.SelectorExpr)
-			packageAlias = selectorType.X.(*ast.Ident).Name
-			typeName := selectorType.Sel.Name
-			typeNameOfArray = typeName
-			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-		}
-
-		if def.Items == nil {
-			def.Items = &v1beta1.JSONSchemaPropsOrArray{}
-		}
-		def.Items.Schema = new(v1beta1.JSONSchemaProps)
-		if isSimpleType(typeNameOfArray) {
-			def.Items.Schema.Type = jsonifyType(typeNameOfArray)
-		} else {
-			if packageAlias != "" {
-				def.Items.Schema.Ref = getPrefixedDefLink(typeNameOfArray, importPaths[packageAlias])
-			} else {
-				def.Items.Schema.Ref = getPrefixedDefLink(typeNameOfArray, curPkgPrefix)
-			}
-		}
-		def.Type = "array"
-
+		props, extTypeRefs := arrayTypeToSchema(tt, comment, importPaths, curPkgPrefix)
+		return props, extTypeRefs
 	case *ast.MapType:
-		mapType := tt
-		switch mapType.Value.(type) {
-		case *ast.Ident:
-			valueType := mapType.Value.(*ast.Ident)
-			if def.AdditionalProperties == nil {
-				def.AdditionalProperties = &v1beta1.JSONSchemaPropsOrBool{}
-			}
-			def.AdditionalProperties.Schema = new(v1beta1.JSONSchemaProps)
-
-			if isSimpleType(valueType.Name) {
-				def.AdditionalProperties.Schema.Type = valueType.Name
-			} else {
-				def.AdditionalProperties.Schema.Ref = getPrefixedDefLink(valueType.Name, curPkgPrefix)
-			}
-		case *ast.InterfaceType:
-			// No op
-			panic("Map Interface Type")
-		}
-		def.Type = "object"
+		mapTypeToSchema(tt, def, curPkgPrefix)
 	case *ast.SelectorExpr:
 		selectorType := tt
-		packageAlias := selectorType.X.(*ast.Ident).Name
-		typeName := selectorType.Sel.Name
+		pkgAlias = selectorType.X.(*ast.Ident).Name
+		typeName = selectorType.Sel.Name
 
-		def.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
-		externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
+		def.Ref = getPrefixedDefLink(typeName, importPaths[pkgAlias])
+		externalTypeRefs = []TypeReference{{TypeName: typeName, PackageName: pkgAlias}}
 	case *ast.StarExpr:
-		starExpr := tt
-		var typeName, packageAlias string
-		switch starExpr.X.(type) {
-		case *ast.Ident:
-			starType := starExpr.X.(*ast.Ident)
-			typeName = starType.Name
-
-		case *ast.SelectorExpr:
-			selectorType := starExpr.X.(*ast.SelectorExpr)
-			packageAlias = selectorType.X.(*ast.Ident).Name
-			typeName = selectorType.Sel.Name
-
-			externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-		}
-		if isSimpleType(typeName) {
-			def.Type = jsonifyType(typeName)
-		} else {
-			if packageAlias != "" {
-				def.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
-			} else {
-				def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
-			}
-		}
+		def, externalTypeRefs = exprToSchema(tt.X, comment, importPaths, curPkgPrefix)
 	case *ast.StructType:
-		structType := tt
-		inlineDefinitions := []v1beta1.JSONSchemaProps{}
-		for _, field := range structType.Fields.List {
-			yamlName, option := extractFromTag(field.Tag)
-			var typeName, packageAlias string
-			switch field.Type.(type) {
-			case *ast.Ident:
-				typeName = field.Type.(*ast.Ident).String()
-			case *ast.StarExpr:
-				// starType = field.Type.(*ast.StarExpr).X.(*ast.Ident).String()
-				starType := field.Type.(*ast.StarExpr)
-				switch starType.X.(type) {
-				case *ast.Ident:
-					typeName = starType.X.(*ast.Ident).Name
-				case *ast.SelectorExpr:
-					selectorType := starType.X.(*ast.SelectorExpr)
-					packageAlias = selectorType.X.(*ast.Ident).Name
-					typeName = selectorType.Sel.Name
-					externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-				}
-			case *ast.SelectorExpr:
-				selectorType := field.Type.(*ast.SelectorExpr)
-				// var packageAlias string
-				// switch selectorType.X.(type) {
-				// case *ast.Ident:
-				packageAlias = selectorType.X.(*ast.Ident).Name
-				// case *ast.SelectorExpr:
-				// 	subSelectorType := selectorType.X.(*ast.SelectorExpr)
-				// 	packageAlias = subSelectorType.X.(*ast.Ident).Name
-				// }
-				typeName = selectorType.Sel.Name
-				externalTypeRefs = append(externalTypeRefs, TypeReference{typeName, packageAlias})
-			}
-			if option == "inline" {
-				inlinedDef := v1beta1.JSONSchemaProps{}
-				if packageAlias != "" {
-					inlinedDef.Ref = getPrefixedDefLink(typeName, importPaths[packageAlias])
-				} else {
-					inlinedDef.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
-				}
-				inlineDefinitions = append(inlineDefinitions, inlinedDef)
-				// def.AnyOf = append(def.AnyOf, v1beta1.JSONSchemaProps{Ref: getPrefixedDefLink(typeName, curPkgPrefix)})
-				continue
-			}
+		externalTypeRefs, def = structTypeToSchema(tt, importPaths, curPkgPrefix, def)
+	}
 
-			if yamlName == "" || yamlName == "-" {
-				continue
-			}
-
-			if option == "required" {
-				def.Required = append(def.Required, yamlName)
-			}
-
-			if def.Properties == nil {
-				def.Properties = make(map[string]v1beta1.JSONSchemaProps)
-			}
-
-			propDef, propExternalTypeDefs := newDefinition(field.Type, field.Doc.Text(), importPaths, curPkgPrefix)
-			externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
-			// if yamlName != "" && yamlName != "-" {
-			def.Properties[yamlName] = *propDef
-			// } else {
-			// 	def.Properties[typeName] = propDef
-			// }
-		}
-		if len(inlineDefinitions) != 0 {
-			childDef := def
-			parentDef := new(v1beta1.JSONSchemaProps)
-			parentDef.AllOf = inlineDefinitions
-
-			if len(childDef.Properties) != 0 {
-				parentDef.AllOf = append(inlineDefinitions, *childDef)
-			}
-			def = parentDef
+	if isSimpleType(typeName) {
+		def.Type = jsonifyType(typeName)
+	} else if len(typeName) > 0 {
+		if pkgAlias != "" {
+			def.Ref = getPrefixedDefLink(typeName, importPaths[pkgAlias])
 		} else {
-			// if def.Type == "" && len(def.Properties) == 0 {
-			// 	def.Type = "object"
-			// }
+			def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
 		}
 	}
 
 	return def, externalTypeRefs
+}
+
+func arrayTypeToSchema(arrayType *ast.ArrayType, comment string, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
+	items, extRefs := exprToSchema(arrayType.Elt, comment, importPaths, curPkgPrefix)
+	props := &v1beta1.JSONSchemaProps{
+		Type:        "array",
+		Items:       &v1beta1.JSONSchemaPropsOrArray{Schema: items},
+		Description: comment,
+	}
+	return props, extRefs
+}
+
+func mapTypeToSchema(mapType *ast.MapType, def *v1beta1.JSONSchemaProps, curPkgPrefix string) {
+	switch mapType.Value.(type) {
+	case *ast.Ident:
+		valueType := mapType.Value.(*ast.Ident)
+		if def.AdditionalProperties == nil {
+			def.AdditionalProperties = &v1beta1.JSONSchemaPropsOrBool{}
+		}
+		def.AdditionalProperties.Schema = new(v1beta1.JSONSchemaProps)
+
+		if isSimpleType(valueType.Name) {
+			def.AdditionalProperties.Schema.Type = valueType.Name
+		} else {
+			def.AdditionalProperties.Schema.Ref = getPrefixedDefLink(valueType.Name, curPkgPrefix)
+		}
+	case *ast.InterfaceType:
+		// No op
+		panic("Map Interface Type")
+	}
+	def.Type = "object"
+}
+
+func structTypeToSchema(structType *ast.StructType, importPaths map[string]string, curPkgPrefix string, def *v1beta1.JSONSchemaProps) ([]TypeReference, *v1beta1.JSONSchemaProps) {
+	externalTypeRefs := []TypeReference{}
+	for _, field := range structType.Fields.List {
+		yamlName, option := extractFromTag(field.Tag)
+
+		if (yamlName == "" && option != "inline") || yamlName == "-" {
+			continue
+		}
+
+		if option == "required" {
+			def.Required = append(def.Required, yamlName)
+		}
+
+		if def.Properties == nil {
+			def.Properties = make(map[string]v1beta1.JSONSchemaProps)
+		}
+
+		propDef, propExternalTypeDefs := exprToSchema(field.Type, field.Doc.Text(), importPaths, curPkgPrefix)
+		externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
+
+		if option == "inline" {
+			def.AllOf = append(def.AllOf, *propDef)
+			continue
+		}
+
+		def.Properties[yamlName] = *propDef
+	}
+
+	return externalTypeRefs, def
 }
 
 func getReachableTypes(startingTypes map[string]bool, definitions v1beta1.JSONSchemaDefinitions) map[string]bool {
@@ -309,7 +225,7 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaD
 			typeDescription := declaration.Doc.Text()
 
 			fmt.Println("Generating schema definition for type:", typeName)
-			def, refTypes := newDefinition(typeSpec.Type, typeDescription, importPaths, curPkgPrefix)
+			def, refTypes := exprToSchema(typeSpec.Type, typeDescription, importPaths, curPkgPrefix)
 			definitions[getFullName(typeName, curPkgPrefix)] = *def
 			externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
 		}
