@@ -159,7 +159,7 @@ func structTypeToSchema(structType *ast.StructType, importPaths map[string]strin
 			continue
 		}
 
-		if option == "required" {
+		if option != "inline" && option != "omitempty" {
 			def.Required = append(def.Required, yamlName)
 		}
 

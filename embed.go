@@ -43,6 +43,7 @@ func embedDefinition(def *v1beta1.JSONSchemaProps, refs map[string]v1beta1.JSONS
 			log.Panicf("can't find the definition of %q", refName)
 		}
 		def.Properties = ref.Properties
+		def.Required = ref.Required
 		def.Type = ref.Type
 		def.Ref = nil
 	}

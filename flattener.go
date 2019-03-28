@@ -32,6 +32,7 @@ func recursiveFlatten(schema *v1beta1.JSONSchemaProps, definition *v1beta1.JSONS
 
 	aggregatedDef := &v1beta1.JSONSchemaProps{
 		Properties: definition.Properties,
+		Required:   definition.Required,
 	}
 	for _, allOfDef := range definition.AllOf {
 		var newDef *v1beta1.JSONSchemaProps
@@ -67,6 +68,8 @@ func mergeDefinitions(lhsDef *v1beta1.JSONSchemaProps, rhsDef *v1beta1.JSONSchem
 	}
 	// 2. Transfer the description
 	lhsDef.Description = rhsDef.Description
+	// 3. Merge required fields
+	lhsDef.Required = append(lhsDef.Required, rhsDef.Required...)
 }
 
 // Flattens the schema by inlining 'allOf' tags.
