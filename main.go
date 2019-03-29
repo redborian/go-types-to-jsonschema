@@ -74,58 +74,77 @@ func extractFromTag(tag *ast.BasicLit) (string, string) {
 }
 
 // exprToSchema converts ast.Expr to JSONSchemaProps
-func exprToSchema(t ast.Expr, comment string, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
-	def := &v1beta1.JSONSchemaProps{}
+func (f *file) exprToSchema(t ast.Expr, doc string, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
+	var def *v1beta1.JSONSchemaProps
 	var externalTypeRefs []TypeReference
-	var typeName, pkgAlias string
 
 	switch tt := t.(type) {
 	case *ast.Ident:
-		typeName = tt.Name
+		def = f.identToSchema(tt, doc, comments)
 	case *ast.ArrayType:
-		def, externalTypeRefs = arrayTypeToSchema(tt, comment, importPaths, curPkgPrefix)
+		def, externalTypeRefs = f.arrayTypeToSchema(tt, doc, comments)
 	case *ast.MapType:
-		def = mapTypeToSchema(tt, curPkgPrefix)
+		def = f.mapTypeToSchema(tt, doc, comments)
 	case *ast.SelectorExpr:
-		selectorType := tt
-		pkgAlias = selectorType.X.(*ast.Ident).Name
-		typeName = selectorType.Sel.Name
-		def.Ref = getPrefixedDefLink(typeName, importPaths[pkgAlias])
-		externalTypeRefs = []TypeReference{{TypeName: typeName, PackageName: pkgAlias}}
+		def, externalTypeRefs = f.selectorExprToSchema(tt, doc, comments)
 	case *ast.StarExpr:
-		def, externalTypeRefs = exprToSchema(tt.X, comment, importPaths, curPkgPrefix)
+		def, externalTypeRefs = f.exprToSchema(tt.X, "", comments)
 	case *ast.StructType:
-		def, externalTypeRefs = structTypeToSchema(tt, importPaths, curPkgPrefix)
+		def, externalTypeRefs = f.structTypeToSchema(tt, comments)
+	case *ast.InterfaceType: // TODO: handle interface if necessary.
+		return &v1beta1.JSONSchemaProps{}, []TypeReference{}
 	}
-
-	def.Description = comment
-
-	if isSimpleType(typeName) {
-		def.Type = jsonifyType(typeName)
-	} else if len(typeName) > 0 {
-		if pkgAlias != "" {
-			def.Ref = getPrefixedDefLink(typeName, importPaths[pkgAlias])
-		} else {
-			def.Ref = getPrefixedDefLink(typeName, curPkgPrefix)
-		}
-	}
+	def.Description = filterDescription(doc)
 
 	return def, externalTypeRefs
 }
 
+// identToSchema converts ast.Ident to JSONSchemaProps.
+func (f *file) identToSchema(ident *ast.Ident, doc string, comments []*ast.CommentGroup) *v1beta1.JSONSchemaProps {
+	def := &v1beta1.JSONSchemaProps{}
+	if isSimpleType(ident.Name) {
+		def.Type = jsonifyType(ident.Name)
+	} else {
+		def.Ref = getPrefixedDefLink(ident.Name, f.pkgPrefix)
+	}
+	processMarkersInComments(def, comments...)
+	return def
+}
+
+// identToSchema converts ast.SelectorExpr to JSONSchemaProps.
+func (f *file) selectorExprToSchema(selectorType *ast.SelectorExpr, doc string, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
+	pkgAlias := selectorType.X.(*ast.Ident).Name
+	typeName := selectorType.Sel.Name
+
+	// TODO(mengqiy): handle special cases here.
+	// e.g. IntOrString https://github.com/kubernetes/kubernetes/blob/a3ccea9d8743f2ff82e41b6c2af6dc2c41dc7b10/staging/src/k8s.io/apimachinery/pkg/util/intstr/intstr.go#L41-L45
+
+	def := &v1beta1.JSONSchemaProps{
+		Ref: getPrefixedDefLink(typeName, f.importPaths[pkgAlias]),
+	}
+	processMarkersInComments(def, comments...)
+	return def, []TypeReference{{TypeName: typeName, PackageName: pkgAlias}}
+}
+
 // arrayTypeToSchema converts ast.ArrayType to JSONSchemaProps by examining the elements in the array.
-func arrayTypeToSchema(arrayType *ast.ArrayType, comment string, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
-	items, extRefs := exprToSchema(arrayType.Elt, comment, importPaths, curPkgPrefix)
-	props := &v1beta1.JSONSchemaProps{
+func (f *file) arrayTypeToSchema(arrayType *ast.ArrayType, doc string, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
+	// not passing doc down to exprToSchema
+	items, extRefs := f.exprToSchema(arrayType.Elt, "", comments)
+	processMarkersInComments(items, comments...)
+
+	def := &v1beta1.JSONSchemaProps{
 		Type:        "array",
 		Items:       &v1beta1.JSONSchemaPropsOrArray{Schema: items},
-		Description: comment,
+		Description: doc,
 	}
-	return props, extRefs
+
+	// TODO: clear the schema on the parent level, since it is on the children level.
+
+	return def, extRefs
 }
 
 // mapTypeToSchema converts ast.MapType to JSONSchemaProps.
-func mapTypeToSchema(mapType *ast.MapType, curPkgPrefix string) *v1beta1.JSONSchemaProps {
+func (f *file) mapTypeToSchema(mapType *ast.MapType, doc string, comments []*ast.CommentGroup) *v1beta1.JSONSchemaProps {
 	def := &v1beta1.JSONSchemaProps{}
 	switch mapType.Value.(type) {
 	case *ast.Ident:
@@ -138,18 +157,20 @@ func mapTypeToSchema(mapType *ast.MapType, curPkgPrefix string) *v1beta1.JSONSch
 		if isSimpleType(valueType.Name) {
 			def.AdditionalProperties.Schema.Type = valueType.Name
 		} else {
-			def.AdditionalProperties.Schema.Ref = getPrefixedDefLink(valueType.Name, curPkgPrefix)
+			def.AdditionalProperties.Schema.Ref = getPrefixedDefLink(valueType.Name, f.pkgPrefix)
 		}
 	case *ast.InterfaceType:
 		// No op
 		panic("Map Interface Type")
 	}
 	def.Type = "object"
+	def.Description = doc
+	processMarkersInComments(def, comments...)
 	return def
 }
 
 // structTypeToSchema converts ast.StructType to JSONSchemaProps by examining each field in the struct.
-func structTypeToSchema(structType *ast.StructType, importPaths map[string]string, curPkgPrefix string) (*v1beta1.JSONSchemaProps, []TypeReference) {
+func (f *file) structTypeToSchema(structType *ast.StructType, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
 	def := &v1beta1.JSONSchemaProps{}
 	externalTypeRefs := []TypeReference{}
 	for _, field := range structType.Fields.List {
@@ -167,7 +188,8 @@ func structTypeToSchema(structType *ast.StructType, importPaths map[string]strin
 			def.Properties = make(map[string]v1beta1.JSONSchemaProps)
 		}
 
-		propDef, propExternalTypeDefs := exprToSchema(field.Type, field.Doc.Text(), importPaths, curPkgPrefix)
+		propDef, propExternalTypeDefs := f.exprToSchema(field.Type, field.Doc.Text(), f.commentMap[field])
+
 		externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
 
 		if option == "inline" {
@@ -185,6 +207,15 @@ func getReachableTypes(startingTypes map[string]bool, definitions v1beta1.JSONSc
 	pruner := DefinitionPruner{definitions, startingTypes}
 	prunedTypes := pruner.Prune(true)
 	return prunedTypes
+}
+
+type file struct {
+	// name prefix of the package
+	pkgPrefix string
+	// importPaths contains a map from import alias to the import path for the file.
+	importPaths map[string]string
+	// commentMap is comment mapping for this file.
+	commentMap ast.CommentMap
 }
 
 func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaDefinitions, ExternalReferences) {
@@ -214,6 +245,19 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaD
 		}
 	}
 
+	// Create an ast.CommentMap from the ast.File's comments.
+	// This helps keeping the association between comments and AST nodes.
+	// TODO: if necessary, support our own rules of comments ownership, golang's
+	// builtin rules are listed at https://golang.org/pkg/go/ast/#NewCommentMap.
+	// It seems it can meet our need at the moment.
+	cmap := ast.NewCommentMap(fset, node, node.Comments)
+
+	f := &file{
+		pkgPrefix:   curPkgPrefix,
+		importPaths: importPaths,
+		commentMap:  cmap,
+	}
+
 	for _, i := range node.Decls {
 		declaration, ok := i.(*ast.GenDecl)
 		if !ok {
@@ -229,7 +273,7 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaD
 			typeDescription := declaration.Doc.Text()
 
 			fmt.Println("Generating schema definition for type:", typeName)
-			def, refTypes := exprToSchema(typeSpec.Type, typeDescription, importPaths, curPkgPrefix)
+			def, refTypes := f.exprToSchema(typeSpec.Type, typeDescription, []*ast.CommentGroup{})
 			definitions[getFullName(typeName, curPkgPrefix)] = *def
 			externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
 		}
