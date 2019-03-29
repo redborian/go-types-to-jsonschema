@@ -37,15 +37,15 @@ func jsonifyType(typeName string) string {
 	case "bool":
 		return "boolean"
 	case "int":
-		return "number"
+		return "integer"
 	case "int32":
-		return "number"
+		return "integer"
 	case "int64":
-		return "number"
+		return "integer"
 	case "float32":
-		return "number"
+		return "float"
 	case "float64":
-		return "number"
+		return "float"
 	case "byte":
 		return "string"
 	}
