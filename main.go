@@ -116,8 +116,48 @@ func (f *file) selectorExprToSchema(selectorType *ast.SelectorExpr, doc string, 
 	pkgAlias := selectorType.X.(*ast.Ident).Name
 	typeName := selectorType.Sel.Name
 
-	// TODO(mengqiy): handle special cases here.
-	// e.g. IntOrString https://github.com/kubernetes/kubernetes/blob/a3ccea9d8743f2ff82e41b6c2af6dc2c41dc7b10/staging/src/k8s.io/apimachinery/pkg/util/intstr/intstr.go#L41-L45
+	typ := TypeReference{
+		TypeName:    typeName,
+		PackageName: f.importPaths[pkgAlias],
+	}
+
+	time := TypeReference{TypeName: "Time", PackageName: "k8s.io/apimachinery/pkg/apis/meta/v1"}
+	duration := TypeReference{TypeName: "Duration", PackageName: "k8s.io/apimachinery/pkg/apis/meta/v1"}
+	quantity := TypeReference{TypeName: "Quantity", PackageName: "k8s.io/apimachinery/pkg/api/resource"}
+	unstructured := TypeReference{TypeName: "Unstructured", PackageName: "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"}
+	rawExtension := TypeReference{TypeName: "RawExtension", PackageName: "k8s.io/apimachinery/pkg/runtime"}
+	intOrString := TypeReference{TypeName: "IntOrString", PackageName: "k8s.io/apimachinery/pkg/util/intstr"}
+
+	switch typ {
+	case time:
+		return &v1beta1.JSONSchemaProps{
+			Type:   "string",
+			Format: "date-time",
+		}, []TypeReference{}
+	case duration:
+		return &v1beta1.JSONSchemaProps{
+			Type: "string",
+		}, []TypeReference{}
+	case quantity:
+		return &v1beta1.JSONSchemaProps{
+			Type: "string",
+		}, []TypeReference{}
+	case unstructured, rawExtension:
+		return &v1beta1.JSONSchemaProps{
+			Type: "object",
+		}, []TypeReference{}
+	case intOrString:
+		return &v1beta1.JSONSchemaProps{
+			AnyOf: []v1beta1.JSONSchemaProps{
+				{
+					Type: "string",
+				},
+				{
+					Type: "integer",
+				},
+			},
+		}, []TypeReference{}
+	}
 
 	def := &v1beta1.JSONSchemaProps{
 		Ref: getPrefixedDefLink(typeName, f.importPaths[pkgAlias]),
