@@ -33,6 +33,7 @@ func recursiveFlatten(schema *v1beta1.JSONSchemaProps, definition *v1beta1.JSONS
 	aggregatedDef := &v1beta1.JSONSchemaProps{
 		Properties: definition.Properties,
 		Required:   definition.Required,
+		Type:       definition.Type,
 	}
 	for _, allOfDef := range definition.AllOf {
 		var newDef *v1beta1.JSONSchemaProps
