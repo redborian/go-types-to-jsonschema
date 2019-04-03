@@ -300,25 +300,48 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaD
 		commentMap:  cmap,
 	}
 
-	for _, i := range node.Decls {
-		declaration, ok := i.(*ast.GenDecl)
+	for i := range node.Decls {
+		declaration, ok := node.Decls[i].(*ast.GenDecl)
 		if !ok {
 			continue
 		}
 
-		for _, spec := range declaration.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-			typeName := typeSpec.Name.Name
-			typeDescription := declaration.Doc.Text()
-
-			fmt.Println("Generating schema definition for type:", typeName)
-			def, refTypes := f.exprToSchema(typeSpec.Type, typeDescription, []*ast.CommentGroup{})
-			definitions[getFullName(typeName, curPkgPrefix)] = *def
-			externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
+		// Skip it if it's not type declaration.
+		if declaration.Tok != token.TYPE {
+			continue
 		}
+
+		// We support the following format
+		// // TreeNode doc
+		// type TreeNode struct {
+		//   left, right *TreeNode
+		//   value *Comparable
+		// }
+		// but not
+		// type (
+		//   // Point doc
+		//   Point struct{ x, y float64 }
+		//   // Point2 doc
+		//   Point2 struct{ x, y int }
+		// )
+		// since the latter format is rarely used in k8s.
+		if len(declaration.Specs) != 1 {
+			continue
+		}
+		ts := declaration.Specs[0]
+		typeSpec, ok := ts.(*ast.TypeSpec)
+		if !ok {
+			fmt.Printf("spec type is: %T\n", ts)
+			continue
+		}
+
+		typeName := typeSpec.Name.Name
+		typeDescription := declaration.Doc.Text()
+
+		fmt.Println("Generating schema definition for type:", typeName)
+		def, refTypes := f.exprToSchema(typeSpec.Type, typeDescription, []*ast.CommentGroup{})
+		definitions[getFullName(typeName, curPkgPrefix)] = *def
+		externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
 	}
 
 	// Overwrite import aliases with actual package names
