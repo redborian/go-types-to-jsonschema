@@ -211,7 +211,9 @@ func (f *file) mapTypeToSchema(mapType *ast.MapType, doc string, comments []*ast
 
 // structTypeToSchema converts ast.StructType to JSONSchemaProps by examining each field in the struct.
 func (f *file) structTypeToSchema(structType *ast.StructType, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
-	def := &v1beta1.JSONSchemaProps{}
+	def := &v1beta1.JSONSchemaProps{
+		Type: "object",
+	}
 	externalTypeRefs := []TypeReference{}
 	for _, field := range structType.Fields.List {
 		yamlName, option := extractFromTag(field.Tag)
