@@ -19,14 +19,17 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ghodss/yaml"
+	"github.com/spf13/afero"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 )
@@ -260,10 +263,14 @@ type file struct {
 	commentMap ast.CommentMap
 }
 
-func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaDefinitions, ExternalReferences) {
+func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaDefinitions, ExternalReferences) {
 	// Open the input go file and parse the Abstract Syntax Tree
 	fset := token.NewFileSet()
-	node, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+	srcFile, err := pr.fs.Open(filePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	node, err := parser.ParseFile(fset, filePath, srcFile, parser.ParseComments)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -354,16 +361,21 @@ func parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaD
 	return definitions, externalRefs
 }
 
-func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage bool) v1beta1.JSONSchemaDefinitions {
-	fmt.Println("Fetching package ", pkgName)
-	debugPrint(referencedTypes)
-	curPackage := Package{pkgName}
-	curPackage.Fetch()
+// mock this in testing.
+var listFiles = func(pkgPath string) (string, []string, error) {
+	pkg, err := build.Import(pkgPath, "", 0)
+	return pkg.Dir, pkg.GoFiles, err
+}
 
+func (pr *prsr) parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage bool) v1beta1.JSONSchemaDefinitions {
 	pkgDefs := make(v1beta1.JSONSchemaDefinitions)
 	pkgExternalTypes := make(ExternalReferences)
 
-	listOfFiles := curPackage.ListFiles()
+	pkgDir, listOfFiles, err := listFiles(pkgName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	pkgPrefix := strings.Replace(pkgName, "/", ".", -1)
 	if rootPackage {
 		pkgPrefix = ""
@@ -371,7 +383,7 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPa
 	fmt.Println("pkgPrefix=", pkgPrefix)
 	for _, fileName := range listOfFiles {
 		fmt.Println("Processing file ", fileName)
-		fileDefs, fileExternalRefs := parseTypesInFile(fileName, pkgPrefix)
+		fileDefs, fileExternalRefs := pr.parseTypesInFile(filepath.Join(pkgDir, fileName), pkgPrefix)
 		mergeDefs(pkgDefs, fileDefs)
 		mergeExternalRefs(pkgExternalTypes, fileExternalRefs)
 	}
@@ -413,7 +425,7 @@ func parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPa
 
 	for childPkgName := range uniquePkgTypeRefs {
 		childTypes := uniquePkgTypeRefs[childPkgName]
-		childDefs := parseTypesInPackage(childPkgName, childTypes, false)
+		childDefs := pr.parseTypesInPackage(childPkgName, childTypes, false)
 		mergeDefs(pkgDefs, childDefs)
 	}
 
@@ -448,11 +460,25 @@ type Options struct {
 	Flatten bool
 	// OutputFormat should be either json or yaml. Default to json
 	OutputFormat string
+
+	// fs is provided FS. We can use afero.NewMemFs() for testing.
+	fs afero.Fs
+}
+
+type prsr struct {
+	fs afero.Fs
 }
 
 func (op *Options) Generate() {
 	if len(op.InputPackage) == 0 || len(op.OutputPath) == 0 {
 		log.Panic("Both input path and output paths need to be set")
+	}
+
+	pr := prsr{}
+	if op.fs != nil {
+		pr.fs = op.fs
+	} else {
+		pr.fs = afero.NewOsFs()
 	}
 
 	schema := v1beta1.JSONSchemaProps{Definitions: make(map[string]v1beta1.JSONSchemaProps)}
@@ -461,7 +487,7 @@ func (op *Options) Generate() {
 	for i := range op.Types {
 		startingPointMap[op.Types[i]] = true
 	}
-	schema.Definitions = parseTypesInPackage(op.InputPackage, startingPointMap, true)
+	schema.Definitions = pr.parseTypesInPackage(op.InputPackage, startingPointMap, true)
 	schema.AnyOf = []v1beta1.JSONSchemaProps{}
 
 	for _, typeName := range op.Types {
