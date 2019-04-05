@@ -60,6 +60,7 @@ func mergeDefs(lhs v1beta1.JSONSchemaDefinitions, rhs v1beta1.JSONSchemaDefiniti
 	for key := range rhs {
 		_, ok := lhs[key]
 		if ok {
+			// change this to logger
 			fmt.Println("JSONSchemaProps ", key, " already present")
 			continue
 		}
@@ -78,6 +79,21 @@ func mergeExternalRefs(lhs ExternalReferences, rhs ExternalReferences) {
 		} else {
 			lhs[key] = append(lhs[key], rhs[key]...)
 		}
+	}
+}
+
+func mergeCRDSpecs(lhs, rhs crdSpecByKind) {
+	if lhs == nil || rhs == nil {
+		return
+	}
+	for key := range rhs {
+		_, ok := lhs[key]
+		if ok {
+			// TODO: change this to use logger
+			fmt.Printf("CRD spec for kind %q already present", key)
+			continue
+		}
+		lhs[key] = rhs[key]
 	}
 }
 

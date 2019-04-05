@@ -20,7 +20,7 @@ import (
 
 // Recursively flattens "allOf" tags. If there is cyclic
 // dependency, execution is aborted.
-func recursiveFlatten(schema *v1beta1.JSONSchemaProps, definition *v1beta1.JSONSchemaProps, defName string, visited *map[string]bool) *v1beta1.JSONSchemaProps {
+func recursiveFlatten(defs v1beta1.JSONSchemaDefinitions, definition *v1beta1.JSONSchemaProps, defName string, visited *map[string]bool) *v1beta1.JSONSchemaProps {
 	if len(definition.AllOf) == 0 {
 		return definition
 	}
@@ -41,8 +41,8 @@ func recursiveFlatten(schema *v1beta1.JSONSchemaProps, definition *v1beta1.JSONS
 			// If the definition has $ref url, fetch the referred resource
 			// after flattening it.
 			nameOfRef := getNameFromURL(*allOfDef.Ref)
-			def := schema.Definitions[nameOfRef]
-			newDef = recursiveFlatten(schema, &def, nameOfRef, visited)
+			def := defs[nameOfRef]
+			newDef = recursiveFlatten(defs, &def, nameOfRef, visited)
 		} else {
 			newDef = &allOfDef
 		}
@@ -74,10 +74,10 @@ func mergeDefinitions(lhsDef *v1beta1.JSONSchemaProps, rhsDef *v1beta1.JSONSchem
 }
 
 // Flattens the schema by inlining 'allOf' tags.
-func flattenAllOf(schema *v1beta1.JSONSchemaProps) {
-	for nameOfDef := range schema.Definitions {
+func flattenAllOf(defs v1beta1.JSONSchemaDefinitions) {
+	for nameOfDef := range defs {
 		visited := make(map[string]bool)
-		def := schema.Definitions[nameOfDef]
-		schema.Definitions[nameOfDef] = *recursiveFlatten(schema, &def, nameOfDef, &visited)
+		def := defs[nameOfDef]
+		defs[nameOfDef] = *recursiveFlatten(defs, &def, nameOfDef, &visited)
 	}
 }
