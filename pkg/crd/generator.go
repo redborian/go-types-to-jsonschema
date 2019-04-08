@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package crd
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"go/ast"
 	"go/build"
@@ -432,23 +431,6 @@ func (pr *prsr) parseTypesInPackage(pkgName string, referencedTypes map[string]b
 	return pkgDefs
 }
 
-func main() {
-	op := &Options{}
-
-	flag.StringVar(&op.InputPackage, "package-name", "", "Go package name")
-	flag.StringVar(&op.OutputPath, "output-file", "", "Output schema json path")
-	// TODO: use cobra StringSlice https://godoc.org/github.com/spf13/pflag#StringSlice
-	typeList := flag.String("types", "", "List of types")
-	flag.BoolVar(&op.Flatten, "flatten schema", false, "If flatten the schema using ref tag")
-	flag.StringVar(&op.OutputFormat, "output-format", "json", "Output format of the schema")
-
-	flag.Parse()
-
-	op.Types = strings.Split(*typeList, ",")
-
-	op.Generate()
-}
-
 type Options struct {
 	// InputPackage is the path of the input package that contains source files.
 	InputPackage string
@@ -516,6 +498,7 @@ func (op *Options) Generate() {
 		schema.Definitions = newDefs
 	}
 
+	// TODO: create dir is not exist.
 	out, err := os.Create(op.OutputPath)
 	if err != nil {
 		log.Panic(err)

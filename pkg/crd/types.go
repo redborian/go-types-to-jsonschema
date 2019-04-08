@@ -12,21 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package crd
 
-import (
-	"fmt"
-
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
-)
-
-func checkDefinitions(defs v1beta1.JSONSchemaDefinitions, startingTypes map[string]bool) {
-	fmt.Printf("Type checking Starting expecting %d types\n", len(defs))
-	pruner := DefinitionPruner{defs, startingTypes}
-	newDefs := pruner.Prune(false)
-	if len(defs) != len(defs) {
-		fmt.Printf("Type checking failed. Expected %d actual %d\n", len(defs), len(newDefs))
-	} else {
-		fmt.Println("Type checking PASSED")
-	}
+// TypeReference denotes the (typeName, packageName) tuple
+type TypeReference struct {
+	TypeName    string
+	PackageName string
 }
+
+// ExternalReferences map contains list of "type: packageName" entries
+type ExternalReferences map[string][]TypeReference
