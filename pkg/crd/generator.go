@@ -35,7 +35,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-const defPrefix = "#/definitions/"
+const (
+	defPrefix = "#/definitions/"
+	inlineTag = "inline"
+)
 
 // Checks whether the typeName represents a simple json type
 
@@ -84,17 +87,17 @@ func (f *file) exprToSchema(t ast.Expr, doc string, comments []*ast.CommentGroup
 
 	switch tt := t.(type) {
 	case *ast.Ident:
-		def = f.identToSchema(tt, doc, comments)
+		def = f.identToSchema(tt, comments)
 	case *ast.ArrayType:
 		def, externalTypeRefs = f.arrayTypeToSchema(tt, doc, comments)
 	case *ast.MapType:
 		def = f.mapTypeToSchema(tt, doc, comments)
 	case *ast.SelectorExpr:
-		def, externalTypeRefs = f.selectorExprToSchema(tt, doc, comments)
+		def, externalTypeRefs = f.selectorExprToSchema(tt, comments)
 	case *ast.StarExpr:
 		def, externalTypeRefs = f.exprToSchema(tt.X, "", comments)
 	case *ast.StructType:
-		def, externalTypeRefs = f.structTypeToSchema(tt, comments)
+		def, externalTypeRefs = f.structTypeToSchema(tt)
 	case *ast.InterfaceType: // TODO: handle interface if necessary.
 		return &v1beta1.JSONSchemaProps{}, []TypeReference{}
 	}
@@ -104,7 +107,7 @@ func (f *file) exprToSchema(t ast.Expr, doc string, comments []*ast.CommentGroup
 }
 
 // identToSchema converts ast.Ident to JSONSchemaProps.
-func (f *file) identToSchema(ident *ast.Ident, doc string, comments []*ast.CommentGroup) *v1beta1.JSONSchemaProps {
+func (f *file) identToSchema(ident *ast.Ident, comments []*ast.CommentGroup) *v1beta1.JSONSchemaProps {
 	def := &v1beta1.JSONSchemaProps{}
 	if isSimpleType(ident.Name) {
 		def.Type = jsonifyType(ident.Name)
@@ -116,7 +119,7 @@ func (f *file) identToSchema(ident *ast.Ident, doc string, comments []*ast.Comme
 }
 
 // identToSchema converts ast.SelectorExpr to JSONSchemaProps.
-func (f *file) selectorExprToSchema(selectorType *ast.SelectorExpr, doc string, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
+func (f *file) selectorExprToSchema(selectorType *ast.SelectorExpr, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
 	pkgAlias := selectorType.X.(*ast.Ident).Name
 	typeName := selectorType.Sel.Name
 
@@ -214,7 +217,7 @@ func (f *file) mapTypeToSchema(mapType *ast.MapType, doc string, comments []*ast
 }
 
 // structTypeToSchema converts ast.StructType to JSONSchemaProps by examining each field in the struct.
-func (f *file) structTypeToSchema(structType *ast.StructType, comments []*ast.CommentGroup) (*v1beta1.JSONSchemaProps, []TypeReference) {
+func (f *file) structTypeToSchema(structType *ast.StructType) (*v1beta1.JSONSchemaProps, []TypeReference) {
 	def := &v1beta1.JSONSchemaProps{
 		Type: "object",
 	}
@@ -222,11 +225,11 @@ func (f *file) structTypeToSchema(structType *ast.StructType, comments []*ast.Co
 	for _, field := range structType.Fields.List {
 		yamlName, option := extractFromTag(field.Tag)
 
-		if (yamlName == "" && option != "inline") || yamlName == "-" {
+		if (yamlName == "" && option != inlineTag) || yamlName == "-" {
 			continue
 		}
 
-		if option != "inline" && option != "omitempty" {
+		if option != inlineTag && option != "omitempty" {
 			def.Required = append(def.Required, yamlName)
 		}
 
@@ -238,7 +241,7 @@ func (f *file) structTypeToSchema(structType *ast.StructType, comments []*ast.Co
 
 		externalTypeRefs = append(externalTypeRefs, propExternalTypeDefs...)
 
-		if option == "inline" {
+		if option == inlineTag {
 			def.AllOf = append(def.AllOf, *propDef)
 			continue
 		}
@@ -358,11 +361,6 @@ func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string, skipCRD b
 		def, refTypes := f.exprToSchema(typeSpec.Type, typeDescription, []*ast.CommentGroup{})
 		definitions[getFullName(typeName, curPkgPrefix)] = *def
 		externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
-
-		commentGroups := f.commentMap[node.Decls[i]]
-		if len(commentGroups) == 0 {
-			commentGroups = f.commentMap[node.Decls[i]]
-		}
 
 		var comments []string
 		for _, c := range f.commentMap[node.Decls[i]] {

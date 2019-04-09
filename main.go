@@ -22,7 +22,10 @@ import (
 )
 
 func main() {
-	op := &crd.Options{}
+	op := &crd.SingleVersionGenerator{
+		SingleVersionOptions: crd.SingleVersionOptions{},
+		WriterOptions:        crd.WriterOptions{},
+	}
 
 	flag.StringVar(&op.InputPackage, "package-name", "", "Go package name")
 	flag.StringVar(&op.OutputPath, "output-file", "", "Output schema json path")

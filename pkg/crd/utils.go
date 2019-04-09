@@ -23,32 +23,42 @@ import (
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 )
 
+const (
+	stringType  = "string"
+	intType     = "int"
+	int32Type   = "int32"
+	int64Type   = "int64"
+	boolType    = "bool"
+	byteType    = "byte"
+	float32Type = "float32"
+	float64Type = "float64"
+
+	stringJSONType  = "string"
+	integerJSONType = "integer"
+	booleanJSONType = "boolean"
+	floatJSONType   = "float"
+)
+
 func isSimpleType(typeName string) bool {
-	return typeName == "string" || typeName == "int" ||
-		typeName == "int32" || typeName == "int64" ||
-		typeName == "bool" || typeName == "byte" ||
-		typeName == "float32" || typeName == "float64"
+	return typeName == stringType || typeName == intType ||
+		typeName == int32Type || typeName == int64Type ||
+		typeName == boolType || typeName == byteType ||
+		typeName == float32Type || typeName == float64Type
 }
 
 // Converts the typeName simple type to json type
 func jsonifyType(typeName string) string {
 	switch typeName {
-	case "string":
-		return "string"
-	case "bool":
-		return "boolean"
-	case "int":
-		return "integer"
-	case "int32":
-		return "integer"
-	case "int64":
-		return "integer"
-	case "float32":
-		return "float"
-	case "float64":
-		return "float"
-	case "byte":
-		return "string"
+	case stringType:
+		return stringJSONType
+	case boolType:
+		return booleanJSONType
+	case intType, int32Type, int64Type:
+		return integerJSONType
+	case float32Type, float64Type:
+		return floatJSONType
+	case byteType:
+		return stringJSONType
 	}
 	fmt.Println("jsonifyType called with a complex type ", typeName)
 	panic("jsonifyType called with a complex type")
