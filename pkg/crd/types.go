@@ -14,6 +14,13 @@
 
 package crd
 
+import (
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+type crdSpecByKind map[schema.GroupKind]*v1beta1.CustomResourceDefinitionSpec
+
 // TypeReference denotes the (typeName, packageName) tuple
 type TypeReference struct {
 	TypeName    string

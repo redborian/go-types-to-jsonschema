@@ -24,7 +24,7 @@ func checkDefinitions(defs v1beta1.JSONSchemaDefinitions, startingTypes map[stri
 	fmt.Printf("Type checking Starting expecting %d types\n", len(defs))
 	pruner := DefinitionPruner{defs, startingTypes}
 	newDefs := pruner.Prune(false)
-	if len(defs) != len(defs) {
+	if len(defs) != len(newDefs) {
 		fmt.Printf("Type checking failed. Expected %d actual %d\n", len(defs), len(newDefs))
 	} else {
 		fmt.Println("Type checking PASSED")

@@ -31,6 +31,8 @@ import (
 	"github.com/spf13/afero"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const defPrefix = "#/definitions/"
@@ -262,7 +264,8 @@ type file struct {
 	commentMap ast.CommentMap
 }
 
-func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.JSONSchemaDefinitions, ExternalReferences) {
+func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string, skipCRD bool) (
+	v1beta1.JSONSchemaDefinitions, ExternalReferences, crdSpecByKind) {
 	// Open the input go file and parse the Abstract Syntax Tree
 	fset := token.NewFileSet()
 	srcFile, err := pr.fs.Open(filePath)
@@ -272,6 +275,12 @@ func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.
 	node, err := parser.ParseFile(fset, filePath, srcFile, parser.ParseComments)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if !skipCRD {
+		// process top-level (not tied to a struct field) markers.
+		// e.g. group name marker +groupName=<group-name>
+		pr.processTopLevelMarkers(node.Comments)
 	}
 
 	definitions := make(v1beta1.JSONSchemaDefinitions)
@@ -306,6 +315,7 @@ func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.
 		commentMap:  cmap,
 	}
 
+	crdSpecs := crdSpecByKind{}
 	for i := range node.Decls {
 		declaration, ok := node.Decls[i].(*ast.GenDecl)
 		if !ok {
@@ -348,6 +358,26 @@ func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.
 		def, refTypes := f.exprToSchema(typeSpec.Type, typeDescription, []*ast.CommentGroup{})
 		definitions[getFullName(typeName, curPkgPrefix)] = *def
 		externalRefs[getFullName(typeName, curPkgPrefix)] = refTypes
+
+		commentGroups := f.commentMap[node.Decls[i]]
+		if len(commentGroups) == 0 {
+			commentGroups = f.commentMap[node.Decls[i]]
+		}
+
+		var comments []string
+		for _, c := range f.commentMap[node.Decls[i]] {
+			comments = append(comments, strings.Split(c.Text(), "\n")...)
+		}
+
+		if !skipCRD {
+			crdSpec := parseCRDs(comments)
+			if crdSpec != nil {
+				crdSpec.Names.Kind = typeName
+				gk := schema.GroupKind{Kind: typeName}
+				crdSpecs[gk] = crdSpec
+				// TODO: validate the CRD spec for one version.
+			}
+		}
 	}
 
 	// Overwrite import aliases with actual package names
@@ -357,7 +387,30 @@ func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string) (v1beta1.
 		}
 	}
 
-	return definitions, externalRefs
+	return definitions, externalRefs, crdSpecs
+}
+
+// processTopLevelMarkers process top-level (not tied to a struct field) markers.
+// e.g. group name marker +groupName=<group-name>
+func (pr *prsr) processTopLevelMarkers(comments []*ast.CommentGroup) {
+	for _, c := range comments {
+		commentLines := strings.Split(c.Text(), "\n")
+		cs := Comments(commentLines)
+		if cs.hasTag("groupName") {
+			group := cs.getTag("groupName", "=")
+			if len(group) == 0 {
+				log.Fatalf("can't use an empty name for the +groupName marker")
+			}
+			if pr.generatorOptions != nil && len(pr.generatorOptions.group) > 0 && group != pr.generatorOptions.group {
+				log.Fatalf("can't have different group names %q and %q one package", pr.generatorOptions.group, group)
+			}
+			if pr.generatorOptions == nil {
+				pr.generatorOptions = &toplevelGeneratorOptions{group: group}
+			} else {
+				pr.generatorOptions.group = group
+			}
+		}
+	}
 }
 
 // mock this in testing.
@@ -366,9 +419,11 @@ var listFiles = func(pkgPath string) (string, []string, error) {
 	return pkg.Dir, pkg.GoFiles, err
 }
 
-func (pr *prsr) parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage bool) v1beta1.JSONSchemaDefinitions {
+func (pr *prsr) parseTypesInPackage(pkgName string, referencedTypes map[string]bool, rootPackage, skipCRD bool) (
+	v1beta1.JSONSchemaDefinitions, crdSpecByKind) {
 	pkgDefs := make(v1beta1.JSONSchemaDefinitions)
 	pkgExternalTypes := make(ExternalReferences)
+	pkgCRDSpecs := make(crdSpecByKind)
 
 	pkgDir, listOfFiles, err := listFiles(pkgName)
 	if err != nil {
@@ -382,9 +437,10 @@ func (pr *prsr) parseTypesInPackage(pkgName string, referencedTypes map[string]b
 	fmt.Println("pkgPrefix=", pkgPrefix)
 	for _, fileName := range listOfFiles {
 		fmt.Println("Processing file ", fileName)
-		fileDefs, fileExternalRefs := pr.parseTypesInFile(filepath.Join(pkgDir, fileName), pkgPrefix)
+		fileDefs, fileExternalRefs, fileCRDSpecs := pr.parseTypesInFile(filepath.Join(pkgDir, fileName), pkgPrefix, skipCRD)
 		mergeDefs(pkgDefs, fileDefs)
 		mergeExternalRefs(pkgExternalTypes, fileExternalRefs)
+		mergeCRDSpecs(pkgCRDSpecs, fileCRDSpecs)
 	}
 
 	// Add pkg prefix to referencedTypes
@@ -424,78 +480,159 @@ func (pr *prsr) parseTypesInPackage(pkgName string, referencedTypes map[string]b
 
 	for childPkgName := range uniquePkgTypeRefs {
 		childTypes := uniquePkgTypeRefs[childPkgName]
-		childDefs := pr.parseTypesInPackage(childPkgName, childTypes, false)
+		childPkgPr := prsr{fs: pr.fs}
+		childDefs, _ := childPkgPr.parseTypesInPackage(childPkgName, childTypes, false, true)
 		mergeDefs(pkgDefs, childDefs)
 	}
 
-	return pkgDefs
+	return pkgDefs, pkgCRDSpecs
 }
 
-type Options struct {
+type SingleVersionOptions struct {
 	// InputPackage is the path of the input package that contains source files.
 	InputPackage string
-	// OutputPath is the path that the schema will be written to.
-	OutputPath string
 	// Types is a list of target types.
 	Types []string
 	// Flatten contains if we use a flattened structure or a embedded structure.
 	Flatten bool
-	// OutputFormat should be either json or yaml. Default to json
-	OutputFormat string
 
 	// fs is provided FS. We can use afero.NewMemFs() for testing.
 	fs afero.Fs
 }
 
+type WriterOptions struct {
+	// OutputPath is the path that the schema will be written to.
+	OutputPath string
+	// OutputFormat should be either json or yaml. Default to json
+	OutputFormat string
+
+	defs     v1beta1.JSONSchemaDefinitions
+	crdSpecs crdSpecByKind
+}
+
+type SingleVersionGenerator struct {
+	SingleVersionOptions
+	WriterOptions
+
+	outputCRD bool
+}
+
+type toplevelGeneratorOptions struct {
+	group string
+}
+
 type prsr struct {
+	generatorOptions *toplevelGeneratorOptions
+
 	fs afero.Fs
 }
 
-func (op *Options) Generate() {
+func (op *SingleVersionGenerator) Generate() {
 	if len(op.InputPackage) == 0 || len(op.OutputPath) == 0 {
 		log.Panic("Both input path and output paths need to be set")
 	}
 
-	pr := prsr{}
-	if op.fs != nil {
-		pr.fs = op.fs
-	} else {
-		pr.fs = afero.NewOsFs()
+	if op.fs == nil {
+		op.fs = afero.NewOsFs()
 	}
 
-	schema := v1beta1.JSONSchemaProps{Definitions: make(map[string]v1beta1.JSONSchemaProps)}
-	schema.Type = "object"
+	if op.outputCRD {
+		// if generating CRD, we should always embed schemas.
+		op.Flatten = false
+	}
+
+	op.defs, op.crdSpecs = op.parse()
+
+	op.write(op.outputCRD, op.Types)
+}
+
+func (pr *prsr) linkCRDSpec(defs v1beta1.JSONSchemaDefinitions, crdSpecs crdSpecByKind) crdSpecByKind {
+	rtCRDSpecs := crdSpecByKind{}
+	for gk := range crdSpecs {
+		if pr.generatorOptions != nil {
+			crdSpecs[gk].Group = pr.generatorOptions.group
+			rtCRDSpecs[schema.GroupKind{Group: pr.generatorOptions.group, Kind: gk.Kind}] = crdSpecs[gk]
+		} else {
+			rtCRDSpecs[gk] = crdSpecs[gk]
+		}
+
+		if len(crdSpecs[gk].Versions) == 0 {
+			log.Printf("no version for CRD %q", gk)
+			continue
+		}
+		if len(crdSpecs[gk].Versions) > 1 {
+			log.Fatalf("the number of versions in one package is more than 1")
+		}
+		def, ok := defs[gk.Kind]
+		if !ok {
+			log.Printf("can't get json shchema for %q", gk)
+			continue
+		}
+		crdSpecs[gk].Versions[0].Schema = &v1beta1.CustomResourceValidation{
+			OpenAPIV3Schema: &def,
+		}
+	}
+	return rtCRDSpecs
+}
+
+func (op *SingleVersionOptions) parse() (v1beta1.JSONSchemaDefinitions, crdSpecByKind) {
 	startingPointMap := make(map[string]bool)
 	for i := range op.Types {
 		startingPointMap[op.Types[i]] = true
 	}
-	schema.Definitions = pr.parseTypesInPackage(op.InputPackage, startingPointMap, true)
-	schema.AnyOf = []v1beta1.JSONSchemaProps{}
-
-	for _, typeName := range op.Types {
-		schema.AnyOf = append(schema.AnyOf, v1beta1.JSONSchemaProps{Ref: getDefLink(typeName)})
-	}
+	pr := prsr{fs: op.fs}
+	defs, crdSpecs := pr.parseTypesInPackage(op.InputPackage, startingPointMap, true, false)
 
 	// flattenAllOf only flattens allOf tags
-	flattenAllOf(&schema)
+	flattenAllOf(defs)
 
-	reachableTypes := getReachableTypes(startingPointMap, schema.Definitions)
-	for key := range schema.Definitions {
+	reachableTypes := getReachableTypes(startingPointMap, defs)
+	for key := range defs {
 		if _, exists := reachableTypes[key]; !exists {
-			delete(schema.Definitions, key)
+			delete(defs, key)
 		}
 	}
 
-	checkDefinitions(schema.Definitions, startingPointMap)
+	checkDefinitions(defs, startingPointMap)
 
 	if !op.Flatten {
-		schema.Definitions = embedSchema(schema.Definitions, startingPointMap)
+		defs = embedSchema(defs, startingPointMap)
 
 		newDefs := v1beta1.JSONSchemaDefinitions{}
 		for name := range startingPointMap {
-			newDefs[name] = schema.Definitions[name]
+			newDefs[name] = defs[name]
 		}
-		schema.Definitions = newDefs
+		defs = newDefs
+	}
+
+	return defs, pr.linkCRDSpec(defs, crdSpecs)
+}
+
+func (op *WriterOptions) write(outputCRD bool, types []string) {
+	var toSerilizeList []interface{}
+	if outputCRD {
+		for gk, spec := range op.crdSpecs {
+			crd := &v1beta1.CustomResourceDefinition{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "apiextensions.k8s.io/v1beta1",
+					Kind:       "CustomResourceDefinition",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   strings.ToLower(gk.Kind),
+					Labels: map[string]string{"controller-tools.k8s.io": "1.0"},
+				},
+				Spec: *spec,
+			}
+			toSerilizeList = append(toSerilizeList, crd)
+		}
+	} else {
+		schema := v1beta1.JSONSchemaProps{Definitions: op.defs}
+		schema.Type = "object"
+		schema.AnyOf = []v1beta1.JSONSchemaProps{}
+		for _, typeName := range types {
+			schema.AnyOf = append(schema.AnyOf, v1beta1.JSONSchemaProps{Ref: getDefLink(typeName)})
+		}
+		toSerilizeList = []interface{}{schema}
 	}
 
 	// TODO: create dir is not exist.
@@ -504,26 +641,28 @@ func (op *Options) Generate() {
 		log.Panic(err)
 	}
 
-	switch strings.ToLower(op.OutputFormat) {
-	// default to json
-	case "json", "":
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		err = enc.Encode(schema)
-		if err2 := out.Close(); err == nil {
-			err = err2
-		}
-		if err != nil {
-			log.Panic(err)
-		}
-	case "yaml":
-		m, err := yaml.Marshal(schema)
-		if err != nil {
-			log.Panic(err)
-		}
-		err = ioutil.WriteFile(op.OutputPath, m, 0644)
-		if err != nil {
-			log.Panic(err)
+	for i := range toSerilizeList {
+		switch strings.ToLower(op.OutputFormat) {
+		// default to json
+		case "json", "":
+			enc := json.NewEncoder(out)
+			enc.SetIndent("", "  ")
+			err = enc.Encode(toSerilizeList[i])
+			if err2 := out.Close(); err == nil {
+				err = err2
+			}
+			if err != nil {
+				log.Panic(err)
+			}
+		case "yaml":
+			m, err := yaml.Marshal(toSerilizeList[i])
+			if err != nil {
+				log.Panic(err)
+			}
+			err = ioutil.WriteFile(op.OutputPath, m, 0644)
+			if err != nil {
+				log.Panic(err)
+			}
 		}
 	}
 }
