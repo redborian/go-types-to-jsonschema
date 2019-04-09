@@ -350,7 +350,7 @@ type Comments []string
 
 // GetTags returns the value for the first comment with a prefix matching "+name="
 // e.g. "+name=foo\n+name=bar" would return "foo"
-func (c Comments) getTag(name, sep string) string {
+func (c Comments) getTag(name, sep string) string { // nolint: unparam
 	for _, c := range c {
 		prefix := fmt.Sprintf("+%s%s", name, sep)
 		if strings.HasPrefix(c, prefix) {
@@ -386,7 +386,7 @@ func (c Comments) getTags(name, sep string) []string {
 
 // getKVTags returns the value for all comments with a prefix and separator.  E.g. for "name" and "="
 // "+name=foo\n+name=bar" would return []string{"foo", "bar"}
-func (c Comments) getKVTags(prefix, sep string) []string {
+func (c Comments) getKVTags(prefix, sep string) []string { // nolint: unparam
 	tags := []string{}
 	for _, c := range c {
 		if strings.HasPrefix(c, prefix) {
@@ -409,16 +409,6 @@ func getCategoriesTag(comments []string) string {
 	return resource
 }
 
-// getResourceTag returns the value of the +kubebuilder:resource tags
-func getResourceTag(comments []string) string {
-	cs := Comments(comments)
-	resource := cs.getTag("kubebuilder:resource", "=")
-	if len(resource) == 0 {
-		panic(fmt.Errorf("must specify +kubebuilder:resource comment"))
-	}
-	return resource
-}
-
 // getSingularName returns the value of the +kubebuilder:singular tag
 func getSingularName(comments []string) string {
 	cs := Comments(comments)
@@ -427,14 +417,6 @@ func getSingularName(comments []string) string {
 		panic(fmt.Errorf("must specify a value to use with +kubebuilder:singular comment"))
 	}
 	return singular
-}
-
-// parseByteValue returns the literal digital number values from a byte array
-func parseByteValue(b []byte) string {
-	elem := strings.Join(strings.Fields(fmt.Sprintln(b)), ",")
-	elem = strings.TrimPrefix(elem, "[")
-	elem = strings.TrimSuffix(elem, "]")
-	return elem
 }
 
 // Scale subresource requires specpath, statuspath, selectorpath key values, represents for JSONPath of
@@ -487,7 +469,9 @@ func printColumnKV(s string) (key, value string, err error) {
 }
 
 // helperPrintColumn is a helper function for the parsePrintColumnParams to compute printer columns.
-func helperPrintColumn(parts string, comment string) (v1beta1.CustomResourceColumnDefinition, error) {
+// TODO: reduce the cyclomatic complexity and remove next line
+// nolint: gocyclo,goconst
+func helperPrintColumn(parts string) (v1beta1.CustomResourceColumnDefinition, error) {
 	config := v1beta1.CustomResourceColumnDefinition{}
 	var count int
 	part := strings.Split(parts, ",")
@@ -553,7 +537,7 @@ func parsePrintColumnParams(comments []string) ([]v1beta1.CustomResourceColumnDe
 	for _, comment := range comments {
 		if strings.Contains(comment, "+kubebuilder:printcolumn") {
 			parts := strings.Replace(comment, "+kubebuilder:printcolumn:", "", -1)
-			res, err := helperPrintColumn(parts, comment)
+			res, err := helperPrintColumn(parts)
 			if err != nil {
 				return []v1beta1.CustomResourceColumnDefinition{}, err
 			}

@@ -52,7 +52,10 @@ func processMarkersInComments(def *v1beta1.JSONSchemaProps, commentGroups ...*as
 // This method is ported from controller-tools, it can removed when things are moved back.
 // getValidation parses the validation tags from the comment and sets the
 // validation rules on the given JSONSchemaProps.
+// TODO: reduce the cyclomatic complexity and remove next line
+//// nolint: gocyclo
 func getValidation(comment string, props *v1beta1.JSONSchemaProps) {
+	const arrayType = "array"
 	comment = strings.TrimLeft(comment, " ")
 	if !strings.HasPrefix(comment, "+kubebuilder:validation:") {
 		return
@@ -111,7 +114,7 @@ func getValidation(comment string, props *v1beta1.JSONSchemaProps) {
 	case "Pattern":
 		props.Pattern = parts[1]
 	case "MaxItems":
-		if props.Type == "array" {
+		if props.Type == arrayType {
 			i, err := strconv.Atoi(parts[1])
 			v := int64(i)
 			if err != nil {
@@ -121,7 +124,7 @@ func getValidation(comment string, props *v1beta1.JSONSchemaProps) {
 			props.MaxItems = &v
 		}
 	case "MinItems":
-		if props.Type == "array" {
+		if props.Type == arrayType {
 			i, err := strconv.Atoi(parts[1])
 			v := int64(i)
 			if err != nil {
@@ -131,7 +134,7 @@ func getValidation(comment string, props *v1beta1.JSONSchemaProps) {
 			props.MinItems = &v
 		}
 	case "UniqueItems":
-		if props.Type == "array" {
+		if props.Type == arrayType {
 			b, err := strconv.ParseBool(parts[1])
 			if err != nil {
 				log.Fatalf("Could not parse bool from %s: %v", comment, err)
@@ -147,7 +150,7 @@ func getValidation(comment string, props *v1beta1.JSONSchemaProps) {
 		}
 		props.MultipleOf = &f
 	case "Enum":
-		if props.Type != "array" {
+		if props.Type != arrayType {
 			value := strings.Split(parts[1], ",")
 			enums := []v1beta1.JSON{}
 			for _, s := range value {
