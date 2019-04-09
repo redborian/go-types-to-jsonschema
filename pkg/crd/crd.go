@@ -93,7 +93,7 @@ func parseCRDs(comments []string) *v1beta1.CustomResourceDefinitionSpec {
 		if err != nil {
 			log.Fatalf("failed to parse printcolumn annotations, error: %v", err.Error())
 		}
-		crdVersion.AdditionalPrinterColumns = result
+		crdSpec.Versions[0].AdditionalPrinterColumns = result
 	}
 
 	rt, err := parseResourceAnnotation(comments)

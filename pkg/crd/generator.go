@@ -32,6 +32,7 @@ import (
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const defPrefix = "#/definitions/"
@@ -372,7 +373,8 @@ func (pr *prsr) parseTypesInFile(filePath string, curPkgPrefix string, skipCRD b
 			crdSpec := parseCRDs(comments)
 			if crdSpec != nil {
 				crdSpec.Names.Kind = typeName
-				crdSpecs[typeName] = crdSpec
+				gk := schema.GroupKind{Kind: typeName}
+				crdSpecs[gk] = crdSpec
 				// TODO: validate the CRD spec for one version.
 			}
 		}
@@ -493,6 +495,9 @@ type SingleVersionOptions struct {
 	Types []string
 	// Flatten contains if we use a flattened structure or a embedded structure.
 	Flatten bool
+
+	// fs is provided FS. We can use afero.NewMemFs() for testing.
+	fs afero.Fs
 }
 
 type WriterOptions struct {
@@ -500,6 +505,9 @@ type WriterOptions struct {
 	OutputPath string
 	// OutputFormat should be either json or yaml. Default to json
 	OutputFormat string
+
+	defs     v1beta1.JSONSchemaDefinitions
+	crdSpecs crdSpecByKind
 }
 
 type SingleVersionGenerator struct {
@@ -507,12 +515,6 @@ type SingleVersionGenerator struct {
 	WriterOptions
 
 	outputCRD bool
-
-	defs     v1beta1.JSONSchemaDefinitions
-	crdSpecs crdSpecByKind
-
-	// fs is provided FS. We can use afero.NewMemFs() for testing.
-	fs afero.Fs
 }
 
 type toplevelGeneratorOptions struct {
@@ -541,31 +543,39 @@ func (op *SingleVersionGenerator) Generate() {
 
 	op.defs, op.crdSpecs = op.parse()
 
-	op.write()
+	op.write(op.outputCRD, op.Types)
 }
 
-func (pr *prsr) linkCRDSpec(defs v1beta1.JSONSchemaDefinitions, crdSpecs crdSpecByKind) {
-	for kind := range crdSpecs {
-		crdSpecs[kind].Group = pr.generatorOptions.group
-		if len(crdSpecs[kind].Versions) == 0 {
-			log.Printf("no version for CRD %q", kind)
+func (pr *prsr) linkCRDSpec(defs v1beta1.JSONSchemaDefinitions, crdSpecs crdSpecByKind) crdSpecByKind {
+	rtCRDSpecs := crdSpecByKind{}
+	for gk := range crdSpecs {
+		if pr.generatorOptions != nil {
+			crdSpecs[gk].Group = pr.generatorOptions.group
+			rtCRDSpecs[schema.GroupKind{Group: pr.generatorOptions.group, Kind: gk.Kind}] = crdSpecs[gk]
+		} else {
+			rtCRDSpecs[gk] = crdSpecs[gk]
+		}
+
+		if len(crdSpecs[gk].Versions) == 0 {
+			log.Printf("no version for CRD %q", gk)
 			continue
 		}
-		if len(crdSpecs[kind].Versions) > 1 {
+		if len(crdSpecs[gk].Versions) > 1 {
 			log.Fatalf("the number of versions in one package is more than 1")
 		}
-		def, ok := defs[kind]
+		def, ok := defs[gk.Kind]
 		if !ok {
-			log.Printf("can't get json shchema for %q", kind)
+			log.Printf("can't get json shchema for %q", gk)
 			continue
 		}
-		crdSpecs[kind].Versions[0].Schema = &v1beta1.CustomResourceValidation{
+		crdSpecs[gk].Versions[0].Schema = &v1beta1.CustomResourceValidation{
 			OpenAPIV3Schema: &def,
 		}
 	}
+	return rtCRDSpecs
 }
 
-func (op *SingleVersionGenerator) parse() (v1beta1.JSONSchemaDefinitions, crdSpecByKind) {
+func (op *SingleVersionOptions) parse() (v1beta1.JSONSchemaDefinitions, crdSpecByKind) {
 	startingPointMap := make(map[string]bool)
 	for i := range op.Types {
 		startingPointMap[op.Types[i]] = true
@@ -595,22 +605,20 @@ func (op *SingleVersionGenerator) parse() (v1beta1.JSONSchemaDefinitions, crdSpe
 		defs = newDefs
 	}
 
-	pr.linkCRDSpec(defs, crdSpecs)
-
-	return defs, crdSpecs
+	return defs, pr.linkCRDSpec(defs, crdSpecs)
 }
 
-func (op *SingleVersionGenerator) write() {
+func (op *WriterOptions) write(outputCRD bool, types []string) {
 	var toSerilizeList []interface{}
-	if op.outputCRD {
-		for kind, spec := range op.crdSpecs {
+	if outputCRD {
+		for gk, spec := range op.crdSpecs {
 			crd := &v1beta1.CustomResourceDefinition{
 				TypeMeta: metav1.TypeMeta{
 					APIVersion: "apiextensions.k8s.io/v1beta1",
 					Kind:       "CustomResourceDefinition",
 				},
 				ObjectMeta: metav1.ObjectMeta{
-					Name:   strings.ToLower(kind),
+					Name:   strings.ToLower(gk.Kind),
 					Labels: map[string]string{"controller-tools.k8s.io": "1.0"},
 				},
 				Spec: *spec,
@@ -621,7 +629,7 @@ func (op *SingleVersionGenerator) write() {
 		schema := v1beta1.JSONSchemaProps{Definitions: op.defs}
 		schema.Type = "object"
 		schema.AnyOf = []v1beta1.JSONSchemaProps{}
-		for _, typeName := range op.Types {
+		for _, typeName := range types {
 			schema.AnyOf = append(schema.AnyOf, v1beta1.JSONSchemaProps{Ref: getDefLink(typeName)})
 		}
 		toSerilizeList = []interface{}{schema}
